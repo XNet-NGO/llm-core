@@ -7,16 +7,13 @@ plugins {
 kotlin {
     jvm()
     macosArm64()
+    macosX64()
     iosArm64()
     iosSimulatorArm64()
-
     sourceSets {
         commonMain.dependencies {
-            api(projects.geminiClient.geminiClientCore)
+            api(projects.common)
             api(projects.openaiClient.openaiClientCore)
-            api(projects.anthropicClient.anthropicClientCore)
-            api(projects.ollamaClient.ollamaClientCore)
-            api(projects.responsesClient.responsesClientCore)
         }
 
         commonTest.dependencies { implementation(libs.ktor.client.mock) }
@@ -32,8 +29,6 @@ kotlin {
             implementation(libs.koin.test)
             implementation(libs.koin.test.junit5)
             implementation(libs.app.cash.turbine)
-            implementation("com.tngtech.archunit:archunit-junit5:1.4.1")
-            implementation("org.reflections:reflections:0.10.2")
             implementation("org.junit.platform:junit-platform-launcher")
         }
     }

@@ -14,7 +14,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "openai-kotlin"
+rootProject.name = "llm-core"
 
 enableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")
 
@@ -63,3 +63,7 @@ include(":gemini-client")
 include(":gemini-client:gemini-client-core")
 
 include(":gemini-client:gemini-client-darwin")
+include(":responses-client")
+include(":responses-client:responses-client-core")
+include(":voice-client")
+include(":voice-client:voice-client-core")

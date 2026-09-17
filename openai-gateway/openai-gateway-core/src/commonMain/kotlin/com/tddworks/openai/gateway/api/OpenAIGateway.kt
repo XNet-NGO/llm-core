@@ -14,8 +14,11 @@ import com.tddworks.openai.api.legacy.completions.api.Completion
 import com.tddworks.openai.api.legacy.completions.api.CompletionRequest
 import com.tddworks.openai.gateway.api.internal.anthropic
 import com.tddworks.openai.gateway.api.internal.default
+import com.tddworks.openai.gateway.api.internal.from
 import com.tddworks.openai.gateway.api.internal.gemini
 import com.tddworks.openai.gateway.api.internal.ollama
+import com.tddworks.openai.gateway.config.ProviderConfig
+import com.tddworks.openai.gateway.di.createOpenAIGateway
 import com.tddworks.openai.gateway.di.initOpenAIGateway
 import kotlinx.coroutines.flow.Flow
 
@@ -23,6 +26,17 @@ import kotlinx.coroutines.flow.Flow
 interface OpenAIGateway {
 
     companion object {
+
+        /**
+         * Creates a gateway from declarative [ProviderConfig]s — the fully
+         * config-driven path. Providers are interpreted live, no code changes
+         * required for new endpoints.
+         */
+        fun create(providerConfigs: List<ProviderConfig>): OpenAIGateway {
+            val providers = providerConfigs.filter { it.enabled }.map { OpenAIProvider.from(it) }
+            return createOpenAIGateway(providers)
+        }
+
         /**
          * Creates an OpenAI Gateway with the specified configurations.
          *
@@ -140,6 +154,9 @@ interface OpenAIGateway {
     fun removeProvider(id: String)
 
     fun getProviders(): List<OpenAIProvider>
+
+    /** Resolve a registered provider by id (null when absent). */
+    fun getProvider(id: String): OpenAIProvider? = null
 
     /**
      * Creates an image given a prompt. Get images as URLs or base64-encoded JSON.
