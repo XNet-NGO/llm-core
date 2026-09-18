@@ -20,7 +20,14 @@ import com.tddworks.openai.api.legacy.completions.api.CompletionRequest
 import com.tddworks.openai.gateway.api.OpenAIProvider
 import com.tddworks.openai.gateway.api.OpenAIProviderConfig
 import com.tddworks.openai.gateway.config.AuthScheme
+import com.tddworks.openai.gateway.config.Batch
+import com.tddworks.openai.gateway.config.BatchFile
+import com.tddworks.openai.gateway.config.BatchRequest
 import com.tddworks.openai.gateway.config.Dialect
+import com.tddworks.openai.gateway.config.EmbeddingRequest
+import com.tddworks.openai.gateway.config.EmbeddingResponse
+import com.tddworks.openai.gateway.config.InteractionRequest
+import com.tddworks.openai.gateway.config.InteractionResponse
 import com.tddworks.openai.gateway.config.ProviderConfig
 import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.accept
@@ -48,7 +55,38 @@ class ConfigOpenAIProvider(
     override val config: OpenAIProviderConfig,
     private val providerConfig: ProviderConfig,
     private val requester: HttpRequester,
-) : OpenAIProvider {
+) : OpenAIProvider, EmbeddingsApi, InteractionsApi, BatchApi {
+
+    private val embeddingsApi: EmbeddingsApi =
+        ConfigEmbeddingsApi(requester, providerConfig.endpoints.embeddings ?: "/v1beta/openai/embeddings")
+
+    private val batchBase: String =
+        providerConfig.endpoints.batches
+            ?.removeSuffix("/batches")
+            ?: "/v1beta/openai"
+
+    private val batchApi: BatchApi = ConfigBatchApi(requester, batchBase)
+
+    private val interactionsApi: InteractionsApi =
+        ConfigInteractionsApi(providerConfig, com.tddworks.di.createJson(), providerConfig.endpoints.interactions ?: "/v1beta/interactions")
+
+    override suspend fun embeddings(request: EmbeddingRequest): EmbeddingResponse =
+        embeddingsApi.embeddings(request)
+
+    override suspend fun interact(request: InteractionRequest): InteractionResponse =
+        interactionsApi.interact(request)
+
+    override suspend fun retrieveInteraction(id: String): InteractionResponse =
+        interactionsApi.retrieveInteraction(id)
+
+    override suspend fun uploadBatchFile(filename: String, content: ByteArray): BatchFile =
+        batchApi.uploadBatchFile(filename, content)
+
+    override suspend fun createBatch(request: BatchRequest): Batch =
+        batchApi.createBatch(request)
+
+    override suspend fun retrieveBatch(id: String): Batch =
+        batchApi.retrieveBatch(id)
 
     /** The declarative provider configuration this provider was built from. */
     fun providerConfig(): ProviderConfig = providerConfig

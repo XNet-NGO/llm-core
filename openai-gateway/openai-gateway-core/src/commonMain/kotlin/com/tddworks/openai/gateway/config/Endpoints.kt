@@ -9,6 +9,9 @@ import kotlinx.serialization.Serializable
 data class Endpoints(
     val chat: String? = null,
     val completions: String? = null,
+    val interactions: String? = null,
+    val batches: String? = null,
+    val files: String? = null,
     val embeddings: String? = null,
     val models: String? = null,
     val responses: String? = null,
