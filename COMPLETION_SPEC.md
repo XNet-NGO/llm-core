@@ -202,3 +202,27 @@ on llm-core is that its public API is sufficient for such a gateway to build on:
 1 → 2 → 3 → 4 → 5 (5.1 depends on 4.1) → 6 → 8. Section 1 is blocking-correctness and
 small; do it first. 4 (auth) gates 5.1 (Bedrock). 7 is out of scope (separate gateway
 project). 8 (release) is last.
+
+
+---
+
+## Kilo note (2026-09-18) — D6 voice is NOT greenfield
+
+§5.2/§3.4 state voice-client-core is an empty stub and WS binary frames are deferred —
+**stale**. `voice-client-core` is already populated and live-tested (commits 2c84941,
+16e41c7, and the Qwen TTS work):
+
+- `voice-client/voice-client-core/src/commonMain/kotlin/com/tddworks/voice/api/`:
+  `VoiceConfig(vendor: GEMINI_LIVE|OPENAI_REALTIME|QWEN_TTS, apiKey, baseUrl, model, voice,
+  audioFormat, sampleRate)`, `VoiceSession` (sendText/sendAudio/sendToolResponse/endTurn/
+  close), `VoiceEvent` (SessionReady/AudioDelta/Utterance/Error/Closed), `Voice` facade.
+- Sessions: `internal/GeminiLiveSession.kt` (v1alpha bidiGenerateContent WS, binary
+  frames, role'd turns, queued sends, generationComplete), `OpenAIRealtimeSession.kt`,
+  `QwenTtsSession.kt` (DashScope `/api-ws/v1/inference` run-task/continue-task/finish-task
+  — account-level ModelNotFound blocker documented).
+- Live smoke tests: `voice-client-core/src/jvmTest/.../QwenTtsSmokeITest.kt` + Gemini
+  bidi test; all pass on JVM (Qwen TTS surfaces the documented server error).
+- `from(config)` binding D6 in gateway-core + `StreamFormat.WS` engine remain, plus
+  turn-stream TTS/STT D7 templates (§5.3).
+
+So §5.2's remaining work = binding + the gateway-side WS engine, not the abstraction.
