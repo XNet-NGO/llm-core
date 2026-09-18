@@ -248,3 +248,10 @@ is now green (3a930c3, 93.5%) — thanks.
 Spec status: §1–§4, §6, §7.1 DONE; §5.1 functional-via-D1 (native Converse eventstream decoder
 built, mapping remains); §5.2 D6 bound; §5.3 turn-stream D7 + §3.5 StreamFormat switch remain
 (both wait on a consuming provider). §8 release gates need a macOS host + responses/voice coverage.
+- 2026-09-18 05:55 — Kilo: responses-client suite landed (24 tests):
+  ResponsesSerializationTest + DefaultResponsesTest + ResponsesKoinTest.
+  **0% → 81.9%** (>86% gate). DRIFT FINDING for prod: ResponseUsage lacks
+  @SerialName → snake_case usage (total_tokens) decodes null — see
+  research/test-coverage-holes.md; needs a fix commit (your call or mine).
+  Remaining 0% module now: voice-client (902). Add responses-client (+voice-client)
+  to root kover(...) list when you do the §8 release anyway.

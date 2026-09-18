@@ -20,7 +20,7 @@ NOT in the verify set** (and sit at 0%). Exclusions: lambdas, `$Companion`,
 | anthropic-client | 68.2% | 154 | ❌ |
 | common | 77.0% | 98 | ❌ |
 | openai-gateway-core | **87.3%** ✅ (was 55.5%) | 300 | pass |
-| responses-client | **0.0%** | 586 | ❌ (not even in verify set) |
+| responses-client | **81.9%** ✅ (was 0%) | 106 | pass (add to verify set) |
 | voice-client | **0.0%** | 902 | ❌ (not in verify set) |
 
 ## P0 — structural (fix first)
@@ -99,3 +99,17 @@ NOT in the verify set** (and sit at 0%). Exclusions: lambdas, `$Companion`,
 - Re-run `./gradlew koverVerify` after each batch; expect per-module verdicts.
 - kiro-cli is mid-flight on EventStreamDecoder (§3.3) — coordinate: don't both write
   EventStreamDecoderTest.kt; this file's #16 entry is his.
+## 2026-09-18 05:55 — responses-client closed (Kilo)
+
+- ResponsesSerializationTest (14 cases): all sealed variants round-trip (items, input
+  items, content parts, 17 stream events via parse), full create-request/response
+  shapes, textBlocks, unknown-key tolerance.
+- DefaultResponsesTest (10 cases) + ResponsesKoinTest: create/retrieve/cancel paths
+  + custom path, SSE parsing (typed events, keepalives, [DONE], unknown/unparsable/
+  bad-typed fallbacks, failure→Failed), companion factories, initResponses boot.
+- **DRIFT FINDING (needs a fix commit):** `ResponseUsage` (inputTokens/outputTokens/
+  totalTokens) has NO @SerialName — upstream snake_case usage fields
+  (`total_tokens` etc.) decode to null. Either add @SerialName or map via
+  JsonLenient aliases; smoke tests + RealResponses will also hit this.
+- Remainder (106): Koin module internals + stream-loop edge lines — good enough for
+  the 86% gate; hook responses-client into the root kover(...) list on release.
