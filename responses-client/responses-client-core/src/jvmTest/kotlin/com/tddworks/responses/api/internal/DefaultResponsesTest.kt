@@ -73,9 +73,7 @@ class DefaultResponsesTest {
         // stream=false is the default, so it must NOT be serialized as stream:true.
         assertTrue(!body!!.contains("\"stream\":true"))
         assertEquals("r-1", out.id)
-        // Known drift: ResponseUsage fields lack @SerialName, so upstream snake_case
-        // usage totals currently decode to null (flagged in test-coverage-holes.md).
-        assertEquals(null, out.usage?.totalTokens)
+        assertEquals(3, out.usage?.totalTokens)
     }
 
     @Test

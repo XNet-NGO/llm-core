@@ -104,10 +104,11 @@ config-drivable, per the design goal "a new provider = one config entry."
 - [ ] **3.4 WS binary frames** (D6) — ALREADY IMPLEMENTED in `voice-client-core` (Kilo):
       `GeminiLiveSession`/`OpenAIRealtimeSession`/`QwenTtsSession` handle WS JSON + binary audio
       frames. No separate work needed in the streaming layer.
-- [ ] **3.5** Route `StreamFormat` selection through the provider — DEFERRED until the
-      EVENTSTREAM engine is wired into a provider (native Bedrock Converse, §5.1 remaining). SSE +
-      NDJSON remain auto-detected in `streamEventsFrom`; the `EventStreamDecoder` primitive now
-      exists for the switch to select when native D4 streaming is built.
+- [x] **3.5** `StreamFormat` now influences provider selection: `from(config)` routes
+      `BEDROCK` + `EVENTSTREAM` → `BedrockConverseProvider` (which consumes `EventStreamDecoder`),
+      else the SSE/NDJSON auto-detecting `streamEventsFrom`. WS is handled by the voice sessions.
+      The remaining formats (CHUNKED) have no consuming dialect yet; they route to the default SSE
+      engine until one exists.
 
 ## 4. Auth: SIGV4 and OAUTH2 — DONE (pluggable-signer design)
 
@@ -141,14 +142,15 @@ schemes fully functional when a signer is installed, and degrades gracefully (un
 
 ## 5. D4 Bedrock + D6 Voice (v1.1 per spec §8)
 
-- [~] **5.1 D4 `BEDROCK`** — PARTIAL (functional). `from(config)` builds Bedrock via its
-      **OpenAI-compatible runtime endpoint** (D1 surface), the spec §8 recommendation. AWS auth is
-      now **concrete**: `AwsSigV4Signer` (§4.5) is auto-registered for SIGV4 when a Bedrock provider
-      is built, so signed requests work out-of-the-box (host can still override). Tested: builds a
-      D1-surface provider; signer verified against AWS reference vectors.
-      REMAINING (v1.1): native Converse / `converse-stream` with
-      `application/vnd.amazon.eventstream` binary framing — still gated on §3.3 (frame decoder).
-      Functional Bedrock is available now via the D1 runtime.
+- [x] **5.1 D4 `BEDROCK`** — DONE. Two paths, config-selected:
+      (a) OpenAI-compatible Bedrock **runtime** (D1 surface) when `streaming=SSE` — the §8 "prefer D1"
+      path; (b) **native Converse** (`BedrockConverseProvider`) when `streaming=EVENTSTREAM`:
+      maps OpenAI chat ↔ Converse JSON (`system` split out, text content blocks, `inferenceConfig`),
+      `POST /model/{id}/converse` for sync, `converse-stream` decoded via `EventStreamDecoder`
+      (`contentBlockDelta.delta.text` → `ChatCompletionChunk`), `stopReason`→finish_reason mapping,
+      alias remap. AWS SigV4 auto-registered. `BedrockConverseProviderTest` (6 cases): request
+      mapping, response parse, converse POST path, **eventstream streaming decode**, from(config)
+      routing both branches. Gateway suite 220/0; JVM + macOS/native compile.
 - [x] **5.2 D6 `VOICE_REALTIME`** — DONE (gateway binding). Per Kilo's HANDOFF correction, the
       abstraction already exists in `voice-client-core` (`VoiceSession`/`VoiceEvent`/`VoiceConfig`
       + live-tested `GeminiLiveSession`/`OpenAIRealtimeSession`/`QwenTtsSession`). Added the narrow
@@ -156,12 +158,13 @@ schemes fully functional when a signer is installed, and degrades gracefully (un
       `VoiceConfig` (vendor from `capabilities.voice`: LIVE→GeminiLive/v1alpha, REALTIME→OpenAI,
       TURN_STREAM→QwenTTS; model from aliases). `from(config)` now redirects VOICE_REALTIME to
       `voiceSession()` with a clear message (voice isn't the chat-oriented OpenAIProvider surface).
-      Added `voice-client-core` as a gateway-core dependency. `VoiceProviderTest` (6 cases) green;
-      gateway 101 tests / 0 failures. Also fixed a pre-existing native-compile bug in Kilo's voice
-      sessions (JVM-only `System` in commonMain → multiplatform `VOICE_DEBUG` const + Ktor `GMTDate`);
-      recorded in HANDOFF. voice-client-core + gateway now compile for macOS/native.
-- [ ] **5.3** Turn-stream (one-way TTS/STT) providers via D7 templates (ElevenLabs, Deepgram,
-      Cartesia).
+      Added `voice-client-core` as a gateway-core dependency. `VoiceProviderTest` (6 cases) green.
+      Also fixed a pre-existing native-compile bug in Kilo's voice sessions (JVM-only `System` in
+      commonMain → multiplatform `VOICE_DEBUG` const + Ktor `GMTDate`); recorded in HANDOFF.
+- [~] **5.3** Turn-stream (one-way TTS/STT): **voice** turn-stream is covered via D6
+      `capabilities.voice=TURN_STREAM` → `QwenTtsSession`. Template-based STT/TTS (Deepgram,
+      ElevenLabs) as **D7** providers wait on the declarative per-op `transforms` field (Kilo pinned
+      the shape; implement when the first non-media D7 consumer lands — no unilateral schema drift).
 
 ## 6. Catalog & capability discovery — DONE
 

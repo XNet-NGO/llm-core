@@ -36,10 +36,218 @@ import kotlinx.serialization.json.put
  * Audio travels as base64 `mediaChunks` inside JSON frames; tool calls arrive as
  * `functionCall` parts / `toolCall` messages. Session readiness is signaled by the
  * server's `setupComplete` frame.
+ *
+ * Payload builders and event parsing are top-level `internal` functions so the
+ * wire contract is unit-testable without a WebSocket (see VoiceSessionsUnitTest).
  */
 // Multiplatform-safe debug gate (was System.getenv("LLMCORE_DEBUG")=="1", JVM-only).
 // Flip to true locally when tracing the live-voice wire protocol.
 private const val VOICE_DEBUG = false
+
+// ---- pure wire contract (unit-tested) ----
+
+internal fun geminiWsUrl(base: String, apiKey: String, apiVersion: String): String {
+    val trimmed = base.trimEnd('/')
+    val keySuffix = if (apiKey.isNotEmpty()) "?key=$apiKey" else ""
+    val connector =
+        "/ws/google.ai.generativelanguage.$apiVersion.GenerativeService.BidiGenerateContent"
+    return "$trimmed$connector$keySuffix"
+}
+
+internal fun geminiSetup(config: VoiceConfig): JsonObject =
+    buildJsonObject {
+        put(
+            "setup",
+            buildJsonObject {
+                put("model", "models/${config.model()}")
+                put(
+                    "generationConfig",
+                    buildJsonObject {
+                        put("responseModalities", JsonArray(listOf(JsonPrimitive("AUDIO"))))
+                        put(
+                            "speechConfig",
+                            buildJsonObject {
+                                put(
+                                    "voiceConfig",
+                                    buildJsonObject {
+                                        put(
+                                            "prebuiltVoiceConfig",
+                                            buildJsonObject {
+                                                put("voiceName", config.voice ?: "Puck")
+                                            },
+                                        )
+                                    },
+                                )
+                            },
+                        )
+                    },
+                )
+                config.systemInstruction?.let { instruction ->
+                    put(
+                        "systemInstruction",
+                        buildJsonObject {
+                            put(
+                                "parts",
+                                buildJsonArray { add(buildJsonObject { put("text", instruction) }) },
+                            )
+                        },
+                    )
+                }
+            },
+        )
+    }
+
+internal fun geminiUserTurn(text: String): JsonObject =
+    buildJsonObject {
+        put(
+            "clientContent",
+            buildJsonObject {
+                put(
+                    "turns",
+                    buildJsonArray {
+                        add(
+                            buildJsonObject {
+                                put("parts", buildJsonArray { add(buildJsonObject { put("text", text) }) })
+                                put("role", "user")
+                            },
+                        )
+                    },
+                )
+                put("turnComplete", true)
+            },
+        )
+    }
+
+internal fun geminiAudioChunk(dataB64: String, sampleRate: Int): JsonObject =
+    buildJsonObject {
+        put(
+            "realtimeInput",
+            buildJsonObject {
+                put(
+                    "mediaChunks",
+                    buildJsonArray {
+                        add(
+                            buildJsonObject {
+                                put("mimeType", "audio/pcm;rate=$sampleRate")
+                                put("data", dataB64)
+                            },
+                        )
+                    },
+                )
+            },
+        )
+    }
+
+internal fun geminiToolResponse(name: String, arguments: String, callId: String, json: Json): JsonObject {
+    val responsePayload =
+        try {
+            json.parseToJsonElement(arguments)
+        } catch (e: Throwable) {
+            buildJsonObject { put("result", arguments) }
+        }
+    return buildJsonObject {
+        put(
+            "toolResponse",
+            buildJsonObject {
+                put(
+                    "functionResponses",
+                    buildJsonArray {
+                        add(
+                            buildJsonObject {
+                                put("id", callId)
+                                put("name", name)
+                                put("response", responsePayload)
+                            },
+                        )
+                    },
+                )
+            },
+        )
+    }
+}
+
+internal fun geminiEndTurnMessage(): JsonObject =
+    buildJsonObject {
+        put(
+            "clientContent",
+            buildJsonObject {
+                put("turns", buildJsonArray {})
+                put("turnComplete", true)
+            },
+        )
+    }
+
+internal fun parseGeminiEvents(json: Json, text: String, model: String): List<VoiceEvent> {
+    val root =
+        try {
+            json.parseToJsonElement(text).jsonObject
+        } catch (e: Throwable) {
+            return emptyList()
+        }
+    return when {
+        root.containsKey("setupComplete") ->
+            listOf(VoiceEvent.SessionReady(model))
+        root.containsKey("serverContent") -> parseGeminiServerContent(root["serverContent"]!!.jsonObject)
+        root.containsKey("toolCall") -> parseGeminiToolCall(root["toolCall"]!!.jsonObject)
+        root.containsKey("interrupted") -> listOf(VoiceEvent.Interrupted())
+        root.containsKey("audioTranscription") ->
+            root["audioTranscription"]!!.jsonObject["text"]?.jsonPrimitive?.contentOrNull
+                ?.let { listOf(VoiceEvent.InputTranscription(it)) }
+                ?: emptyList()
+        root.containsKey("error") ->
+            listOf(
+                VoiceEvent.Error(
+                    message =
+                        root["error"]?.jsonObject?.get("message")?.jsonPrimitive?.contentOrNull
+                            ?: "gemini live error",
+                ),
+            )
+        else -> emptyList()
+    }
+}
+
+private fun parseGeminiServerContent(content: JsonObject): List<VoiceEvent> {
+    val events = mutableListOf<VoiceEvent>()
+    content["modelTurn"]?.jsonObject?.get("parts")?.jsonArray?.forEach { partEl ->
+        val part = partEl.jsonObject
+        part["inlineData"]?.jsonObject?.let { data ->
+            data["data"]?.jsonPrimitive?.contentOrNull?.let { events.add(VoiceEvent.AudioDelta(it)) }
+        }
+        part["text"]?.jsonPrimitive?.contentOrNull?.let {
+            events.add(VoiceEvent.OutputTranscription(it))
+        }
+        part["functionCall"]?.jsonObject?.let { fc ->
+            events.add(
+                VoiceEvent.ToolCall(
+                    name = fc["name"]?.jsonPrimitive?.contentOrNull ?: "",
+                    arguments = fc["args"]?.toString() ?: "{}",
+                    callId = fc["id"]?.jsonPrimitive?.contentOrNull,
+                ),
+            )
+        }
+    }
+    val complete =
+        ((content["turnComplete"] ?: content["generationComplete"])
+            ?.jsonPrimitive?.contentOrNull
+            ?: "false").toBooleanStrictOrNull() == true
+    if (complete) events.add(VoiceEvent.TurnComplete())
+    return events
+}
+
+private fun parseGeminiToolCall(call: JsonObject): List<VoiceEvent> {
+    val fc = call["functionCalls"]?.jsonArray?.firstOrNull()?.jsonObject ?: return emptyList()
+    return listOf(
+        VoiceEvent.ToolCall(
+            name = fc["name"]?.jsonPrimitive?.contentOrNull ?: "",
+            arguments = fc["args"]?.toString() ?: "{}",
+            callId =
+                fc["id"]?.jsonPrimitive?.contentOrNull
+                    ?: call["id"]?.jsonPrimitive?.contentOrNull,
+        ),
+    )
+}
+
+// ---- session wrapper ----
 
 internal class GeminiLiveSession(private val config: VoiceConfig) : VoiceSession {
 
@@ -61,7 +269,7 @@ internal class GeminiLiveSession(private val config: VoiceConfig) : VoiceSession
                 val session = this
                 outbound = session.outgoing
                 if (VOICE_DEBUG) println("GEMINI-LIVE WS OPENED url=${wsUrl()}")
-                session.outgoing.send(Frame.Text(json.encodeToString(setupMessage())))
+                session.outgoing.send(Frame.Text(json.encodeToString(geminiSetup(config))))
                 if (VOICE_DEBUG) println("GEMINI-LIVE SETUP SENT")
                 launch {
                     for (payload in pendingSends) {
@@ -77,7 +285,7 @@ internal class GeminiLiveSession(private val config: VoiceConfig) : VoiceSession
                         }
                     if (text == null) continue
                     if (VOICE_DEBUG) println("GEMINI-LIVE RAW: $text")
-                    parseEvents(text).forEach { eventsFlow.tryEmit(it) }
+                    parseGeminiEvents(json, text, config.model()).forEach { eventsFlow.tryEmit(it) }
                 }
             }
         } catch (e: Throwable) {
@@ -88,64 +296,7 @@ internal class GeminiLiveSession(private val config: VoiceConfig) : VoiceSession
         }
     }
 
-    /**
-     * Gemini Live binds at the GenerativeService WebSocket connector:
-     * `wss://<host>/ws/google.ai.generativelanguage.v1beta/GenerativeService.BidiGenerateContent`.
-     * `VoiceConfig.baseUrl` is the ws connector prefix; the model travels in the
-     * setup message.
-     */
-    private fun wsUrl(): String {
-        val base = config.baseUrl().trimEnd('/')
-        val keySuffix =
-            if (config.apiKey().isNotEmpty()) "?key=${config.apiKey()}" else ""
-        val connector =
-            "/ws/google.ai.generativelanguage.${config.apiVersion}.GenerativeService.BidiGenerateContent"
-        return "$base$connector$keySuffix"
-    }
-
-    private fun setupMessage(): JsonObject =
-        buildJsonObject {
-                put(
-                    "setup",
-                    buildJsonObject {
-                        put("model", "models/${config.model()}")
-                        put(
-                            "generationConfig",
-                            buildJsonObject {
-                                put("responseModalities", JsonArray(listOf(JsonPrimitive("AUDIO"))))
-                                put(
-                                    "speechConfig",
-                                    buildJsonObject {
-                                        put(
-                                            "voiceConfig",
-                                            buildJsonObject {
-                                                put(
-                                                    "prebuiltVoiceConfig",
-                                                    buildJsonObject {
-                                                        put("voiceName", config.voice ?: "Puck")
-                                                    },
-                                                )
-                                            },
-                                        )
-                                    },
-                                )
-                            },
-                        )
-                        config.systemInstruction?.let { instruction ->
-                            put(
-                                "systemInstruction",
-                                buildJsonObject {
-                                    put(
-                                        "parts",
-                                        buildJsonArray { add(buildJsonObject { put("text", instruction) }) },
-                                    )
-                                },
-                            )
-                        }
-                    },
-            )
-        }
-        
+    private fun wsUrl(): String = geminiWsUrl(config.baseUrl(), config.apiKey(), config.apiVersion)
 
     private val pendingSends = Channel<String>(Channel.UNLIMITED)
 
@@ -157,100 +308,20 @@ internal class GeminiLiveSession(private val config: VoiceConfig) : VoiceSession
 
     @OptIn(ExperimentalEncodingApi::class)
     override suspend fun sendAudio(data: ByteArray) {
-        val b64 = Base64.encode(data)
-        send(
-            buildJsonObject {
-                put(
-                    "realtimeInput",
-                    buildJsonObject {
-                        put(
-                            "mediaChunks",
-                            buildJsonArray {
-                                add(
-                                    buildJsonObject {
-                                        put("mimeType", "audio/pcm;rate=${config.sampleRate}")
-                                        put("data", b64)
-                                    },
-                                )
-                            },
-                        )
-                    },
-                )
-            },
-        )
+        send(geminiAudioChunk(Base64.encode(data), config.sampleRate))
     }
 
     override suspend fun sendText(text: String) {
-        send(
-            buildJsonObject {
-                put(
-                    "clientContent",
-                    buildJsonObject {
-                        put(
-                            "turns",
-                            buildJsonArray {
-                                add(
-                                    buildJsonObject {
-                                        put(
-                                            "parts",
-                                            buildJsonArray { add(buildJsonObject { put("text", text) }) },
-                                        )
-                                        put("role", "user")
-                                    },
-                                )
-                            },
-                        )
-                        put("turnComplete", true)
-                    },
-                )
-            },
-        )
+        send(geminiUserTurn(text))
     }
 
     override suspend fun sendToolResponse(name: String, arguments: String, id: String?) {
-        val responsePayload =
-            try {
-                json.parseToJsonElement(arguments)
-            } catch (e: Throwable) {
-                buildJsonObject { put("result", arguments) }
-            }
-        send(
-            buildJsonObject {
-                put(
-                    "toolResponse",
-                    buildJsonObject {
-                        put(
-                            "functionResponses",
-                            buildJsonArray {
-                                add(
-                                    buildJsonObject {
-                                        put("id", id ?: "fc_${nextCallId()}")
-                                        put("name", name)
-                                        put("response", responsePayload)
-                                    },
-                                )
-                            },
-                        )
-                    },
-                )
-            },
-        )
+        val callId = id ?: "fc_${nextCallId()}"
+        send(geminiToolResponse(name, arguments, callId, json))
     }
 
     override suspend fun endTurn() {
-        // Gemini Live: the turn is ended by the complete flag on clientContent;
-        // an explicit end-of-turn marker for audio turns is sent with turns.
-        send(
-            buildJsonObject {
-                put(
-                    "clientContent",
-                    buildJsonObject {
-                        put("turns", buildJsonArray {})
-                        put("turnComplete", true)
-                    },
-                )
-            },
-        )
+        send(geminiEndTurnMessage())
     }
 
     override suspend fun close() {
@@ -261,74 +332,4 @@ internal class GeminiLiveSession(private val config: VoiceConfig) : VoiceSession
     private var callCounter = 0L
 
     private fun nextCallId(): String = (++callCounter).toString()
-
-    private fun parseEvents(text: String): List<VoiceEvent> {
-        val root =
-            try {
-                json.parseToJsonElement(text).jsonObject
-            } catch (e: Throwable) {
-                return emptyList()
-            }
-        return when {
-            root.containsKey("setupComplete") ->
-                listOf(VoiceEvent.SessionReady(config.model()))
-            root.containsKey("serverContent") -> parseServerContent(root["serverContent"]!!.jsonObject)
-            root.containsKey("toolCall") -> parseToolCall(root["toolCall"]!!.jsonObject)
-            root.containsKey("interrupted") -> listOf(VoiceEvent.Interrupted())
-            root.containsKey("audioTranscription") ->
-                root["audioTranscription"]!!.jsonObject["text"]?.jsonPrimitive?.contentOrNull
-                    ?.let { listOf(VoiceEvent.InputTranscription(it)) }
-                    ?: emptyList()
-            root.containsKey("error") ->
-                listOf(
-                    VoiceEvent.Error(
-                        message =
-                            root["error"]?.jsonObject?.get("message")?.jsonPrimitive?.contentOrNull
-                                ?: "gemini live error",
-                    ),
-                )
-            else -> emptyList()
-        }
-    }
-
-    private fun parseServerContent(content: JsonObject): List<VoiceEvent> {
-        val events = mutableListOf<VoiceEvent>()
-        content["modelTurn"]?.jsonObject?.get("parts")?.jsonArray?.forEach { partEl ->
-            val part = partEl.jsonObject
-            part["inlineData"]?.jsonObject?.let { data ->
-                data["data"]?.jsonPrimitive?.contentOrNull?.let { events.add(VoiceEvent.AudioDelta(it)) }
-            }
-            part["text"]?.jsonPrimitive?.contentOrNull?.let {
-                events.add(VoiceEvent.OutputTranscription(it))
-            }
-            part["functionCall"]?.jsonObject?.let { fc ->
-                events.add(
-                    VoiceEvent.ToolCall(
-                        name = fc["name"]?.jsonPrimitive?.contentOrNull ?: "",
-                        arguments = fc["args"]?.toString() ?: "{}",
-                        callId = fc["id"]?.jsonPrimitive?.contentOrNull,
-                    ),
-                )
-            }
-        }
-        val complete =
-            ((content["turnComplete"] ?: content["generationComplete"])
-                ?.jsonPrimitive?.contentOrNull
-                ?: "false").toBooleanStrictOrNull() == true
-        if (complete) events.add(VoiceEvent.TurnComplete())
-        return events
-    }
-
-    private fun parseToolCall(call: JsonObject): List<VoiceEvent> {
-        val fc = call["functionCalls"]?.jsonArray?.firstOrNull()?.jsonObject ?: return emptyList()
-        return listOf(
-            VoiceEvent.ToolCall(
-                name = fc["name"]?.jsonPrimitive?.contentOrNull ?: "",
-                arguments = fc["args"]?.toString() ?: "{}",
-                callId =
-                    fc["id"]?.jsonPrimitive?.contentOrNull
-                        ?: call["id"]?.jsonPrimitive?.contentOrNull,
-            ),
-        )
-    }
 }

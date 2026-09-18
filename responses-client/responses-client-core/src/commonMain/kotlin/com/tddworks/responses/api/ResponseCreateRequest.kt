@@ -1,5 +1,6 @@
 package com.tddworks.responses.api
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 
@@ -35,19 +36,19 @@ data class ResponseCreateRequest(
     val model: String,
     val input: List<ResponseInputItem> = emptyList(),
     val instructions: String? = null,
-    val maxOutputTokens: Long? = null,
-    val previousResponseId: String? = null,
+    @SerialName("max_output_tokens") val maxOutputTokens: Long? = null,
+    @SerialName("previous_response_id") val previousResponseId: String? = null,
     val store: Boolean? = null,
     val stream: Boolean = false,
     val include: List<String> = emptyList(),
     val reasoning: ReasoningConfig? = null,
     val text: ResponseTextConfig? = null,
     val tools: List<ResponseTool> = emptyList(),
-    val toolChoice: JsonElement? = null,
-    val parallelToolCalls: Boolean? = null,
+    @SerialName("tool_choice") val toolChoice: JsonElement? = null,
+    @SerialName("parallel_tool_calls") val parallelToolCalls: Boolean? = null,
     val temperature: Double? = null,
-    val topP: Double? = null,
+    @SerialName("top_p") val topP: Double? = null,
     val metadata: Map<String, String> = emptyMap(),
-    val outputAudio: OutputAudioConfig? = null,
+    @SerialName("output_audio") val outputAudio: OutputAudioConfig? = null,
     val user: String? = null,
 )

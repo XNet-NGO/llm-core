@@ -14,11 +14,11 @@ data class ResponseError(
 
 @Serializable
 data class ResponseUsage(
-    val inputTokens: Long? = null,
-    val inputTokensDetails: JsonElement? = null,
-    val outputTokens: Long? = null,
-    val outputTokensDetails: JsonElement? = null,
-    val totalTokens: Long? = null,
+    @SerialName("input_tokens") val inputTokens: Long? = null,
+    @SerialName("input_tokens_details") val inputTokensDetails: JsonElement? = null,
+    @SerialName("output_tokens") val outputTokens: Long? = null,
+    @SerialName("output_tokens_details") val outputTokensDetails: JsonElement? = null,
+    @SerialName("total_tokens") val totalTokens: Long? = null,
 )
 
 @Serializable

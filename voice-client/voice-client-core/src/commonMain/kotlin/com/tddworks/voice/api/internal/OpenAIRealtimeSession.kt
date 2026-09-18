@@ -33,6 +33,106 @@ import kotlinx.serialization.json.put
  * OpenAI Realtime (D6, canonical shape one): WebSocket JSON events, base64 PCM audio
  * via `input_audio_buffer.append`, output via `response.audio.delta`.
  */
+
+
+// ---- pure wire contract (unit-tested) ----
+
+internal fun realtimeWsUrl(base: String, apiKey: String, model: String): String {
+    val trimmed = base.trimEnd('/')
+    val keySuffix = if (apiKey.isNotEmpty()) "&api-key=$apiKey" else ""
+    return "$trimmed/v1/realtime?model=$model$keySuffix"
+}
+
+internal fun realtimeAudioAppend(dataB64: String): JsonObject =
+    buildJsonObject {
+        put("type", "input_audio_buffer.append")
+        put("audio", dataB64)
+    }
+
+internal fun realtimeSessionUpdate(systemInstruction: String?, voice: String?): JsonObject =
+    buildJsonObject {
+        put("type", "session.update")
+        put(
+            "session",
+            buildJsonObject {
+                put("modalities", JsonArray(listOf(JsonPrimitive("audio"), JsonPrimitive("text"))))
+                put("instructions", systemInstruction ?: "")
+                put("voice", voice ?: "alloy")
+            },
+        )
+    }
+
+internal fun realtimeToolOutput(callId: String, arguments: String): JsonObject =
+    buildJsonObject {
+        put("type", "conversation.item.create")
+        put(
+            "item",
+            buildJsonObject {
+                put("type", "function_call_output")
+                put("call_id", callId)
+                put("output", arguments)
+            },
+        )
+    }
+
+internal fun realtimeResponseCreate(): JsonObject = buildJsonObject { put("type", "response.create") }
+
+internal fun realtimeCommit(): JsonObject = buildJsonObject { put("type", "input_audio_buffer.commit") }
+
+internal fun realtimeArguments(raw: kotlinx.serialization.json.JsonElement?): String =
+    when (raw) {
+        null -> "{}"
+        is kotlinx.serialization.json.JsonPrimitive -> raw.content
+        else -> raw.toString()
+    }
+
+internal fun parseRealtimeEvent(json: Json, text: String, model: String): VoiceEvent? {
+    val root =
+        try {
+            json.parseToJsonElement(text).jsonObject
+        } catch (e: Throwable) {
+            return null
+        }
+    val type = root["type"]?.jsonPrimitive?.contentOrNull ?: return null
+    return when (type) {
+        "session.created" ->
+            VoiceEvent.SessionReady(
+                model =
+                    root["session"]?.jsonObject?.get("model")?.jsonPrimitive?.contentOrNull
+                        ?: model,
+            )
+        "response.audio.delta" ->
+            root["delta"]?.jsonPrimitive?.contentOrNull?.let { VoiceEvent.AudioDelta(it) }
+        "response.audio_transcript.delta" ->
+            root["delta"]?.jsonPrimitive?.contentOrNull?.let {
+                VoiceEvent.OutputTranscription(it, partial = true)
+            }
+        "response.audio_transcript.done" ->
+            root["transcript"]?.jsonPrimitive?.contentOrNull?.let {
+                VoiceEvent.OutputTranscription(it)
+            }
+        "response.text.delta", "response.output_text.delta" ->
+            root["delta"]?.jsonPrimitive?.contentOrNull?.let { VoiceEvent.TextDelta(it) }
+        "response.function_call_arguments.done" ->
+            VoiceEvent.ToolCall(
+                name = root["name"]?.jsonPrimitive?.contentOrNull ?: "",
+                arguments = realtimeArguments(root["arguments"]),
+                callId = root["call_id"]?.jsonPrimitive?.contentOrNull,
+            )
+        "response.done" -> VoiceEvent.TurnComplete()
+        "input_audio_buffer.speech_started" -> VoiceEvent.Interrupted("speech started")
+        "error" ->
+            root["error"]?.jsonObject?.let {
+                VoiceEvent.Error(
+                    message = it["message"]?.jsonPrimitive?.contentOrNull ?: "unknown error",
+                    code = it["type"]?.jsonPrimitive?.contentOrNull,
+                )
+            }
+        else -> null
+    }
+}
+
+// ---- session wrapper ----
 internal class OpenAIRealtimeSession(private val config: VoiceConfig) : VoiceSession {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -61,7 +161,7 @@ internal class OpenAIRealtimeSession(private val config: VoiceConfig) : VoiceSes
                 eventsFlow.tryEmit(VoiceEvent.SessionReady(config.model()))
                 for (frame in sessionScope.incoming) {
                     if (frame !is Frame.Text) continue
-                    val event = parseEvent(frame.readText()) ?: continue
+                    val event = parseRealtimeEvent(json, frame.readText(), config.model()) ?: continue
                     eventsFlow.tryEmit(event)
                 }
             }
@@ -73,12 +173,7 @@ internal class OpenAIRealtimeSession(private val config: VoiceConfig) : VoiceSes
         }
     }
 
-    private fun wsUrl(): String {
-        val base = config.baseUrl().trimEnd('/')
-        val keySuffix =
-            if (config.apiKey().isNotEmpty()) "&api-key=${config.apiKey()}" else ""
-        return "$base/v1/realtime?model=${config.model()}$keySuffix"
-    }
+    private fun wsUrl(): String = realtimeWsUrl(config.baseUrl(), config.apiKey(), config.model())
 
     private val pendingSends = Channel<String>(Channel.UNLIMITED)
 
@@ -88,52 +183,22 @@ internal class OpenAIRealtimeSession(private val config: VoiceConfig) : VoiceSes
 
     @OptIn(ExperimentalEncodingApi::class)
     override suspend fun sendAudio(data: ByteArray) {
-        val b64 = Base64.encode(data)
-        send(
-            buildJsonObject {
-                put("type", "input_audio_buffer.append")
-                put("audio", b64)
-            },
-        )
+        send(realtimeAudioAppend(Base64.encode(data)))
     }
 
     override suspend fun sendText(text: String) {
-        send(
-            buildJsonObject {
-                put("type", "session.update")
-                put(
-                    "session",
-                    buildJsonObject {
-                        put("modalities", JsonArray(listOf(JsonPrimitive("audio"), JsonPrimitive("text"))))
-                        put("instructions", config.systemInstruction ?: "")
-                        put("voice", config.voice ?: "alloy")
-                    },
-                )
-            },
-        )
+        send(realtimeSessionUpdate(config.systemInstruction, config.voice))
         endTurn()
     }
 
     override suspend fun sendToolResponse(name: String, arguments: String, id: String?) {
-        send(
-            buildJsonObject {
-                put("type", "conversation.item.create")
-                put(
-                    "item",
-                    buildJsonObject {
-                        put("type", "function_call_output")
-                        put("call_id", id ?: "call_${nextCallId()}")
-                        put("output", arguments)
-                    },
-                )
-            },
-        )
-        send(buildJsonObject { put("type", "response.create") })
+        send(realtimeToolOutput(id ?: "call_${nextCallId()}", arguments))
+        send(realtimeResponseCreate())
     }
 
     override suspend fun endTurn() {
-        send(buildJsonObject { put("type", "input_audio_buffer.commit") })
-        send(buildJsonObject { put("type", "response.create") })
+        send(realtimeCommit())
+        send(realtimeResponseCreate())
     }
 
     private fun nextCallId(): String = (++callCounter).toString()
@@ -141,51 +206,5 @@ internal class OpenAIRealtimeSession(private val config: VoiceConfig) : VoiceSes
     override suspend fun close() {
         scope.coroutineContext[Job]?.cancel()
         eventsFlow.tryEmit(VoiceEvent.Closed())
-    }
-
-    private fun parseEvent(text: String): VoiceEvent? {
-        val root =
-            try {
-                json.parseToJsonElement(text).jsonObject
-            } catch (e: Throwable) {
-                return null
-            }
-        val type = root["type"]?.jsonPrimitive?.contentOrNull ?: return null
-        return when (type) {
-            "session.created" ->
-                VoiceEvent.SessionReady(
-                    model =
-                        root["session"]?.jsonObject?.get("model")?.jsonPrimitive?.contentOrNull
-                            ?: config.model(),
-                )
-            "response.audio.delta" ->
-                root["delta"]?.jsonPrimitive?.contentOrNull?.let { VoiceEvent.AudioDelta(it) }
-            "response.audio_transcript.delta" ->
-                root["delta"]?.jsonPrimitive?.contentOrNull?.let {
-                    VoiceEvent.OutputTranscription(it, partial = true)
-                }
-            "response.audio_transcript.done" ->
-                root["transcript"]?.jsonPrimitive?.contentOrNull?.let {
-                    VoiceEvent.OutputTranscription(it)
-                }
-            "response.text.delta", "response.output_text.delta" ->
-                root["delta"]?.jsonPrimitive?.contentOrNull?.let { VoiceEvent.TextDelta(it) }
-            "response.function_call_arguments.done" ->
-                VoiceEvent.ToolCall(
-                    name = root["name"]?.jsonPrimitive?.contentOrNull ?: "",
-                    arguments = root["arguments"]?.jsonPrimitive?.contentOrNull ?: "{}",
-                    callId = root["call_id"]?.jsonPrimitive?.contentOrNull,
-                )
-            "response.done" -> VoiceEvent.TurnComplete()
-            "input_audio_buffer.speech_started" -> VoiceEvent.Interrupted("speech started")
-            "error" ->
-                root["error"]?.jsonObject?.let {
-                    VoiceEvent.Error(
-                        message = it["message"]?.jsonPrimitive?.contentOrNull ?: "unknown error",
-                        code = it["type"]?.jsonPrimitive?.contentOrNull,
-                    )
-                }
-            else -> null
-        }
     }
 }

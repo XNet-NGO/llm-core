@@ -317,13 +317,25 @@ fun OpenAIProvider.Companion.from(config: ProviderConfig): OpenAIProvider = when
                 com.tddworks.openai.gateway.config.AwsSigV4Signer,
             )
         }
-        ConfigOpenAIProvider(
-            id = config.id,
-            name = config.name.ifBlank { config.id },
-            config = legacyConfig(config),
-            providerConfig = config,
-            requester = configHttpRequester(config),
-        )
+        // Native Converse (application/vnd.amazon.eventstream) when the config opts in via
+        // streaming=EVENTSTREAM; otherwise the OpenAI-compatible Bedrock runtime (D1 surface).
+        if (config.streaming == com.tddworks.openai.gateway.config.StreamFormat.EVENTSTREAM) {
+            BedrockConverseProvider(
+                id = config.id,
+                name = config.name.ifBlank { config.id },
+                config = legacyConfig(config),
+                providerConfig = config,
+                requester = configHttpRequester(config),
+            )
+        } else {
+            ConfigOpenAIProvider(
+                id = config.id,
+                name = config.name.ifBlank { config.id },
+                config = legacyConfig(config),
+                providerConfig = config,
+                requester = configHttpRequester(config),
+            )
+        }
     }
     // Voice is duplex/audio, not the chat-oriented OpenAIProvider surface — build it with
     // OpenAIProvider.voiceSession(config) instead (see VoiceProvider.kt).

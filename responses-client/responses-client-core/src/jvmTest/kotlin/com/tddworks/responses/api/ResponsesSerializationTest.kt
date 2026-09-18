@@ -135,6 +135,10 @@ class ResponsesSerializationTest {
         val decoded = json.decodeFromString(ResponseCreateRequest.serializer(), str)
         assertEquals(req, decoded)
         assertTrue(str.contains("gpt-5.5"))
+        assertTrue(str.contains("\"max_output_tokens\":256"))
+        assertTrue(str.contains("\"tool_choice\""))
+        assertTrue(str.contains("\"output_audio\""))
+        assertTrue(str.contains("\"top_p\":0.9"))
     }
 
     // ---- Response full shape + helpers ----

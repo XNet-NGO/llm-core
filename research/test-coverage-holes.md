@@ -21,7 +21,7 @@ NOT in the verify set** (and sit at 0%). Exclusions: lambdas, `$Companion`,
 | common | 77.0% | 98 | ❌ |
 | openai-gateway-core | **87.3%** ✅ (was 55.5%) | 300 | pass |
 | responses-client | **81.9%** ✅ (was 0%) | 106 | pass (add to verify set) |
-| voice-client | **0.0%** | 902 | ❌ (not in verify set) |
+| voice-client | **77.5%** ✅ (was 0%) | 208 (WS plumbing) | near-pass |
 
 ## P0 — structural (fix first)
 

@@ -45,6 +45,120 @@ import kotlinx.serialization.json.put
  * acknowledgements and errors come back as TEXT frames (`header.event: task-succeeded /
  * task-failed`).
  */
+
+
+// ---- pure wire contract (unit-tested) ----
+
+internal fun qwenWsUrl(base: String): String {
+    val trimmed = base.trimEnd('/')
+    return if (trimmed.contains("api-ws")) trimmed else "$trimmed/api-ws/v1/inference"
+}
+
+internal fun qwenStartFrame(taskId: String, model: String, voice: String?, audioFormat: String, sampleRate: Int): String {
+    val json = Json { ignoreUnknownKeys = true }
+    return json.encodeToString(
+        buildJsonObject {
+            put(
+                "header",
+                buildJsonObject {
+                    put("action", "run-task")
+                    put("task_id", taskId)
+                    put("streaming", "duplex")
+                },
+            )
+            put(
+                "payload",
+                buildJsonObject {
+                    put("model", model)
+                    put("task_group", "audio")
+                    put("task", "tts")
+                    put("function", "SpeechSynthesizer")
+                    put("input", buildJsonObject {})
+                    put(
+                        "parameters",
+                        buildJsonObject {
+                            put("voice", voice ?: "Cherry")
+                            put("format", audioFormat.ifBlank { "wav" })
+                            put("sample_rate", sampleRate)
+                            put("text_type", "PlainText")
+                            put("volume", 50)
+                            put("rate", 1.0)
+                            put("pitch", 1.0)
+                            put("seed", 0)
+                            put("type", 0)
+                        },
+                    )
+                },
+            )
+        },
+    )
+}
+
+internal fun qwenContinuePayload(taskId: String, model: String, text: String): String {
+    val json = Json { ignoreUnknownKeys = true }
+    return json.encodeToString(
+        buildJsonObject {
+            put(
+                "header",
+                buildJsonObject {
+                    put("action", "continue-task")
+                    put("task_id", taskId)
+                    put("streaming", "duplex")
+                },
+            )
+            put(
+                "payload",
+                buildJsonObject {
+                    put("model", model)
+                    put("task_group", "audio")
+                    put("task", "tts")
+                    put("function", "SpeechSynthesizer")
+                    put("input", buildJsonObject { put("text", text) })
+                },
+            )
+        },
+    )
+}
+
+internal fun qwenFinishPayload(taskId: String): String {
+    val json = Json { ignoreUnknownKeys = true }
+    return json.encodeToString(
+        buildJsonObject {
+            put(
+                "header",
+                buildJsonObject {
+                    put("action", "finish-task")
+                    put("task_id", taskId)
+                    put("streaming", "duplex")
+                },
+            )
+            put("payload", buildJsonObject {})
+        },
+    )
+}
+
+internal fun parseQwenEvent(json: Json, text: String, model: String): VoiceEvent? {
+    val root =
+        try {
+            json.parseToJsonElement(text).jsonObject
+        } catch (e: Throwable) {
+            return null
+        }
+    val event = root["header"]?.jsonObject?.get("event")?.jsonPrimitive?.contentOrNull
+        ?: root["payload"]?.jsonObject?.get("output")?.jsonObject?.get("event")?.jsonPrimitive?.contentOrNull
+        ?: return null
+    return when (event) {
+        "task-succeeded" -> VoiceEvent.SessionReady(model)
+        "task-failed" ->
+            VoiceEvent.Error(
+                code = root["header"]?.jsonObject?.get("error_code")?.jsonPrimitive?.contentOrNull,
+                message = root["header"]?.jsonObject?.get("error_message")?.jsonPrimitive?.contentOrNull ?: "tts task failed",
+            )
+        else -> null
+    }
+}
+
+// ---- session wrapper ----
 internal class QwenTtsSession(private val config: VoiceConfig) : VoiceSession {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -62,11 +176,7 @@ internal class QwenTtsSession(private val config: VoiceConfig) : VoiceSession {
         scope.launch { run() }
     }
 
-    private fun wsUrl(): String {
-        val base = config.baseUrl().trimEnd('/')
-        // DashScope inference WS: /api-ws/v1/inference
-        return if (base.contains("api-ws")) base else "$base/api-ws/v1/inference"
-    }
+    private fun wsUrl(): String = qwenWsUrl(config.baseUrl())
 
     private suspend fun run() {
         val client = HttpClient { install(WebSockets) }
@@ -81,7 +191,7 @@ internal class QwenTtsSession(private val config: VoiceConfig) : VoiceSession {
             ) {
                 outbound = outgoing
                 // Start frame must go FIRST, before any continue-task/finish-task frames.
-                pendingSends.trySend(startFrame())
+                pendingSends.trySend(qwenStartFrame(taskId, config.model(), config.voice, config.audioFormat, config.sampleRate))
                 startQueued.complete(Unit)
                 launch {
                     for (payload in pendingSends) {
@@ -97,7 +207,17 @@ internal class QwenTtsSession(private val config: VoiceConfig) : VoiceSession {
                         }
                         is Frame.Text -> {
                             val text = frame.readText()
-                            runCatching { emitJsonEvent(text) }
+                            val event = runCatching { parseQwenEvent(json, text, config.model()) }.getOrNull()
+                            when (event) {
+                                is VoiceEvent.SessionReady -> {
+                                    if (!taskEstablished) {
+                                        taskEstablished = true
+                                        eventsFlow.tryEmit(event)
+                                    }
+                                }
+                                is VoiceEvent.Error -> eventsFlow.tryEmit(event)
+                                else -> {}
+                            }
                         }
                         else -> {}
                     }
@@ -111,44 +231,6 @@ internal class QwenTtsSession(private val config: VoiceConfig) : VoiceSession {
         }
     }
 
-    private fun startFrame(): String =
-        json.encodeToString(
-            buildJsonObject {
-                put(
-                    "header",
-                    buildJsonObject {
-                        put("action", "run-task")
-                        put("task_id", taskId)
-                        put("streaming", "duplex")
-                    },
-                )
-                put(
-                    "payload",
-                    buildJsonObject {
-                        put("model", config.model())
-                        put("task_group", "audio")
-                        put("task", "tts")
-                        put("function", "SpeechSynthesizer")
-                        put("input", buildJsonObject {})
-                        put(
-                            "parameters",
-                            buildJsonObject {
-                                put("voice", config.voice ?: "Cherry")
-                                put("format", config.audioFormat.ifBlank { "wav" })
-                                put("sample_rate", config.sampleRate)
-                                put("text_type", "PlainText")
-                                put("volume", 50)
-                                put("rate", 1.0)
-                                put("pitch", 1.0)
-                                put("seed", 0)
-                                put("type", 0)
-                            },
-                        )
-                    },
-                )
-            },
-        )
-
     private fun emitBinary(bytes: ByteArray) {
         val b64 = klaus(bytes)
         eventsFlow.tryEmit(VoiceEvent.AudioDelta(b64))
@@ -157,76 +239,18 @@ internal class QwenTtsSession(private val config: VoiceConfig) : VoiceSession {
     @OptIn(kotlin.io.encoding.ExperimentalEncodingApi::class)
     private fun klaus(bytes: ByteArray): String = kotlin.io.encoding.Base64.encode(bytes)
 
-    private fun emitJsonEvent(text: String) {
-        val root = json.parseToJsonElement(text).jsonObject
-        val header = root["header"]?.jsonObject
-        val event = header?.get("event")?.jsonPrimitive?.contentOrNull
-        when (event) {
-            "task-succeeded" -> {
-                if (!taskEstablished) {
-                    taskEstablished = true
-                    eventsFlow.tryEmit(VoiceEvent.SessionReady(config.model()))
-                }
-            }
-            "task-failed" -> {
-                val message = header?.get("error_message")?.jsonPrimitive?.contentOrNull ?: "tts task failed"
-                val code = header?.get("error_code")?.jsonPrimitive?.contentOrNull
-                eventsFlow.tryEmit(VoiceEvent.Error(code = code, message = message))
-            }
-        }
-    }
-
     override suspend fun sendAudio(data: ByteArray) {
         // TTS sessions are text-in; audio input is not part of the contract.
     }
 
     override suspend fun sendText(text: String) {
         startQueued.await()
-        val payload =
-            buildJsonObject {
-                put(
-                    "header",
-                    buildJsonObject {
-                        put("action", "continue-task")
-                        put("task_id", taskId)
-                        put("streaming", "duplex")
-                    },
-                )
-                put(
-                    "payload",
-                    buildJsonObject {
-                        put("model", config.model())
-                        put("task_group", "audio")
-                        put("task", "tts")
-                        put("function", "SpeechSynthesizer")
-                        put(
-                            "input",
-                            buildJsonObject {
-                                put("text", text)
-                            },
-                        )
-                    },
-                )
-            }
-        pendingSends.trySend(json.encodeToString(payload))
+        pendingSends.trySend(qwenContinuePayload(taskId, config.model(), text))
     }
 
     override suspend fun endTurn() {
         startQueued.await()
-        // TTS synthesizes per utterance, so an explicit finish closes the task.
-        val finish =
-            buildJsonObject {
-                put(
-                    "header",
-                    buildJsonObject {
-                        put("action", "finish-task")
-                        put("task_id", taskId)
-                        put("streaming", "duplex")
-                    },
-                )
-                put("payload", buildJsonObject {})
-            }
-        pendingSends.trySend(json.encodeToString(finish))
+        pendingSends.trySend(qwenFinishPayload(taskId))
     }
 
     override suspend fun sendToolResponse(name: String, arguments: String, id: String?) {
