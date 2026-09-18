@@ -1,11 +1,13 @@
 plugins {
     alias(libs.plugins.kotlinx.serialization)
     alias(libs.plugins.kover)
+    alias(libs.plugins.androidLibrary)
     `maven-publish`
 }
 
 kotlin {
     jvm()
+    androidTarget()
     macosArm64()
     macosX64()
     iosArm64()
@@ -22,6 +24,8 @@ kotlin {
 
         jvmMain.dependencies { api(libs.ktor.client.cio) }
 
+        androidMain.dependencies { api(libs.ktor.client.okhttp) }
+
         jvmTest.dependencies {
             implementation(project.dependencies.platform(libs.junit.bom))
             implementation(libs.bundles.jvm.test)
@@ -35,3 +39,8 @@ kotlin {
 }
 
 tasks { named<Test>("jvmTest") { useJUnitPlatform() } }
+android {
+    namespace = "com.tddworks.voice.client"
+    compileSdk = 35
+    defaultConfig { minSdk = 24 }
+}

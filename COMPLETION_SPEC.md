@@ -199,6 +199,14 @@ on llm-core is that its public API is sufficient for such a gateway to build on:
       JVM **and** macOS/native (`AwsSigV4Signer`, `EventStreamDecoder`, `CatalogCache`,
       `CapabilityInference`, `VoiceProvider`, hardened `Stream.kt`). No expect/actual needed —
       time via Ktor `GMTDate`, crypto via KMP `kotlincrypto`. Verified `compileKotlinMacosArm64`.
+- [x] **8.1a Android target added.** All 8 core modules now declare `androidTarget()`
+      (`com.android.library`, compileSdk 35 / minSdk 24), `androidMain` uses the Ktor OkHttp engine,
+      and `common` gained the Android `httpClientEngine()` actual. Android SDK + NDK r27b installed
+      locally (`local.properties` gitignored). **`compileDebugKotlinAndroid` BUILD SUCCESSFUL for
+      every module** (common, openai/anthropic/ollama/gemini/responses/voice clients, gateway) —
+      covers Android's `arm64-v8a` ABI. JVM + macOS ARM64 + full `jvmTest` remain green. The
+      `kotlincrypto` SigV4 dependency supports Android. (KMMBridge/publish untouched; darwin export
+      still needs a Mac per §8.2.)
 - [x] **8.2** `Package.swift` — gateway types ride the existing `OpenAIGateway` XCFramework on
       republish (no per-type edit). **Voice Swift export now scaffolded:** added
       `:voice-client:voice-client-darwin` (KMMBridge + SKIE), exporting `voice-client-core` as a

@@ -4,12 +4,14 @@ import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 plugins {
     alias(libs.plugins.kotlinx.serialization)
     alias(libs.plugins.kover)
+    alias(libs.plugins.androidLibrary)
     alias(libs.plugins.ksp)
     `maven-publish`
 }
 
 kotlin {
     jvm()
+    androidTarget()
     iosArm64()
     iosSimulatorArm64()
     macosArm64()
@@ -31,6 +33,8 @@ kotlin {
         macosMain.dependencies { api(libs.ktor.client.darwin) }
 
         jvmMain.dependencies { api(libs.ktor.client.cio) }
+
+        androidMain.dependencies { api(libs.ktor.client.okhttp) }
 
         jvmTest.dependencies {
             implementation(project.dependencies.platform(libs.junit.bom))
@@ -75,3 +79,9 @@ ksp {
 }
 
 tasks { named<Test>("jvmTest") { useJUnitPlatform() } }
+
+android {
+    namespace = "com.tddworks.gemini.client"
+    compileSdk = 35
+    defaultConfig { minSdk = 24 }
+}

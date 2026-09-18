@@ -1,11 +1,13 @@
 plugins {
     alias(libs.plugins.kotlinx.serialization)
     alias(libs.plugins.kover)
+    alias(libs.plugins.androidLibrary)
     `maven-publish`
 }
 
 kotlin {
     jvm()
+    androidTarget()
     macosArm64()
     macosX64()
     iosArm64()
@@ -28,6 +30,8 @@ kotlin {
 
         jvmMain.dependencies { api(libs.ktor.client.okhttp) }
 
+        androidMain.dependencies { api(libs.ktor.client.okhttp) }
+
         jvmTest.dependencies {
             implementation(project.dependencies.platform(libs.junit.bom))
             implementation(libs.bundles.jvm.test)
@@ -40,6 +44,12 @@ kotlin {
             implementation("org.junit.platform:junit-platform-launcher")
         }
     }
+}
+
+android {
+    namespace = "com.tddworks.common"
+    compileSdk = 35
+    defaultConfig { minSdk = 24 }
 }
 
 tasks { named<Test>("jvmTest") { useJUnitPlatform() } }
