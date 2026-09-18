@@ -70,9 +70,11 @@ NOT in the verify set** (and sit at 0%). Exclusions: lambdas, `$Companion`,
     (image_url, file), `max_completion_tokens` vs `max_tokens`, reasoning delta
     passthrough, usage-in-stream, alias remap on images/completions paths, signedFor
     non-2xx, empty-aliases no-op.
-11. **CredentialProviders (18)** — SPI lookup, fallback-to-unsigned, signer caching.
-12. **ProviderConfig (14) + CatalogConfig (16) + Capabilities (24)** — fromJson/toJson
-    round-trip, defaults, lenient JSON, unknown keys, `all()`/`chatOnly()`.
+11. **CredentialProviders — DONE** (kiro-cli 9f07832: CredentialProvidersTest —
+    register/resolve/unregister/clear/overwrite + SigningContext content equality, 6 tests).
+12. **ProviderConfig / CatalogConfig / Capabilities — DONE** (kiro-cli 9f07832:
+    ProviderConfigSerializationTest — fromJson/toJson round-trip, minimal defaults, lenient
+    unknown-keys, SIGV4/OAUTH2 field parse, all()/chatOnly(), CatalogModel modalities, 7 tests).
 13. **Extensions.kt (12 of 12)** — currently ~0%: any remap/url helpers.
 14. **gemini 71.5% / anthropic 68.2%** — the Companion `create` overloads (env-gated
     ITests only) + internal adapters: mock-based tests for `Gemini.create(…)/instance(…)`
@@ -81,8 +83,8 @@ NOT in the verify set** (and sit at 0%). Exclusions: lambdas, `$Companion`,
 
 ## P2 — common (98 missed)
 
-15. **AnySerializer (64, 0%)** — full serialize/deserialize matrix incl. nested
-    objects/arrays/numbers-as-strings; biggest single-file win in common.
+15. **AnySerializer — DONE** (kiro-cli 9f07832: AnySerializerTest — primitives, nested maps,
+    lists/arrays, toString fallback, int-vs-double, round-trip, 9 tests; common 77%→92%).
 16. **EventStreamDecoder (20/104, 80.8%)** — EventStreamMessage framing edge cases
     (boundary splits, int32 read overflow) — kiro-cli WIP; finish + cover.
 17. **ListResponse (4), HostPortConnectionConfig (4), ConnectionConfig (2)** — defaults
