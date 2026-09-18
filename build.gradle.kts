@@ -23,6 +23,8 @@ dependencies {
     kover(projects.ollamaClient.ollamaClientCore)
     kover(projects.geminiClient.geminiClientCore)
     kover(projects.common)
+    kover(projects.responsesClient.responsesClientCore)
+    kover(projects.voiceClient.voiceClientCore)
 }
 
 versionCatalogUpdate { versionSelector(VersionSelectors.STABLE) }
