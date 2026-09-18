@@ -55,4 +55,70 @@ class StreamTest : AutoCloseKoinTest() {
             channel.close()
         }
     }
+
+    @Test
+    fun `tolerates CRLF, missing spaces, comments, keepalives and blank lines`(): Unit =
+        runBlocking {
+            val channel = ByteChannel(autoFlush = true)
+            val mockEngine = MockEngine { request ->
+                when (request.url.toString()) {
+                    "http://example.com/stream" ->
+                        respond(content = channel, status = HttpStatusCode.OK)
+
+                    else -> respond("", HttpStatusCode.NotFound)
+                }
+            }
+            val client = HttpClient(mockEngine)
+            val content =
+                flow<StreamResponse> {
+                    client.preparePost("http://example.com/stream").execute { streamEventsFrom(it) }
+                }
+
+            // CRLF line endings + a leading SSE comment/keepalive line
+            channel.writeStringUtf8(": ping\r\n")
+            channel.writeStringUtf8("\r\n") // blank separator
+            // no space after data:
+            channel.writeStringUtf8("data:{\"content\": \"c1\"}\r\n")
+            // extra spaces after data:
+            channel.writeStringUtf8("data:   {\"content\": \"c2\"}\r\n")
+            // another keepalive mid-stream
+            channel.writeStringUtf8(": keep-alive\r\n")
+            // end sentinel with no space after data:
+            channel.writeStringUtf8("data:[DONE]\r\n")
+
+            content.test {
+                assertEquals(StreamResponse("c1"), awaitItem())
+                assertEquals(StreamResponse("c2"), awaitItem())
+                awaitComplete()
+                channel.close()
+            }
+        }
+
+    @Test
+    fun `parses NDJSON bare-object records without data prefix`(): Unit = runBlocking {
+        val channel = ByteChannel(autoFlush = true)
+        val mockEngine = MockEngine { request ->
+            when (request.url.toString()) {
+                "http://example.com/stream" ->
+                    respond(content = channel, status = HttpStatusCode.OK)
+
+                else -> respond("", HttpStatusCode.NotFound)
+            }
+        }
+        val client = HttpClient(mockEngine)
+        val content =
+            flow<StreamResponse> {
+                client.preparePost("http://example.com/stream").execute { streamEventsFrom(it) }
+            }
+
+        // NDJSON (ollama-style): one JSON object per line, no `data:` prefix, CRLF-mixed.
+        channel.writeStringUtf8("{\"content\": \"n1\"}\n")
+        channel.writeStringUtf8("{\"content\": \"n2\"}\r\n")
+        content.test {
+            assertEquals(StreamResponse("n1"), awaitItem())
+            assertEquals(StreamResponse("n2"), awaitItem())
+            channel.close()
+            awaitComplete()
+        }
+    }
 }

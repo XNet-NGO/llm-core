@@ -23,7 +23,10 @@ import com.tddworks.openai.gateway.config.AuthScheme
 import com.tddworks.openai.gateway.config.Batch
 import com.tddworks.openai.gateway.config.BatchFile
 import com.tddworks.openai.gateway.config.BatchRequest
+import com.tddworks.openai.gateway.config.CredentialProviders
 import com.tddworks.openai.gateway.config.Dialect
+import com.tddworks.openai.gateway.config.SignedCredentials
+import com.tddworks.openai.gateway.config.SigningContext
 import com.tddworks.openai.gateway.config.EmbeddingRequest
 import com.tddworks.openai.gateway.config.EmbeddingResponse
 import com.tddworks.openai.gateway.config.InteractionRequest
@@ -91,7 +94,31 @@ class ConfigOpenAIProvider(
     /** The declarative provider configuration this provider was built from. */
     fun providerConfig(): ProviderConfig = providerConfig
 
-    private fun applyAuthAndHeaders(builder: HttpRequestBuilder) {
+    /** Resolve an incoming model slug through the provider's alias map (pass-through if absent). */
+    private fun aliasFor(model: String): String = providerConfig.aliases[model] ?: model
+
+    private fun ChatCompletionRequest.remapped(): ChatCompletionRequest {
+        val target = aliasFor(model.value)
+        return if (target == model.value) this
+        else copy(model = com.tddworks.openai.api.chat.api.OpenAIModel(target))
+    }
+
+    private fun CompletionRequest.remapped(): CompletionRequest {
+        val target = aliasFor(model.value)
+        return if (target == model.value) this
+        else copy(model = com.tddworks.openai.api.chat.api.OpenAIModel(target))
+    }
+
+    private fun ImageCreate.remapped(): ImageCreate {
+        val target = aliasFor(model.value)
+        return if (target == model.value) this
+        else copy(model = com.tddworks.openai.api.chat.api.OpenAIModel(target))
+    }
+
+    private fun applyAuthAndHeaders(
+        builder: HttpRequestBuilder,
+        signed: SignedCredentials = SignedCredentials(),
+    ) {
         val auth = providerConfig.auth
         when (auth.scheme) {
             AuthScheme.BEARER -> {
@@ -111,51 +138,78 @@ class ConfigOpenAIProvider(
             }
             AuthScheme.NONE -> {}
             AuthScheme.SIGV4, AuthScheme.OAUTH2 -> {
-                // Host-provided signer/oauth attaches credentials at transport level.
+                // Credentials are produced by a host-registered RequestSigner (resolved in
+                // signedFor()) and passed in via [signed]; nothing static to attach here.
             }
         }
+        // Host-signed contributions (SIGV4/OAUTH2) take effect first.
+        signed.headers.forEach { (k, v) -> builder.header(k, v) }
+        signed.queryParams.forEach { (k, v) -> builder.parameter(k, v) }
         auth.extraHeaders.forEach { (k, v) -> builder.header(k, v) }
         auth.queryParams.forEach { (k, v) -> builder.parameter(k, v) }
     }
 
-    override suspend fun chatCompletions(request: ChatCompletionRequest): ChatCompletion =
-        requester.performRequest {
+    /**
+     * Resolve host-provided credentials for schemes that need signing/token exchange
+     * (`SIGV4`, `OAUTH2`). Returns empty credentials for all other schemes, or when no signer
+     * is registered — the request then proceeds unsigned rather than failing hard, matching
+     * the documented graceful-degradation contract in [CredentialProviders].
+     */
+    private suspend fun signedFor(path: String, body: ByteArray = ByteArray(0)): SignedCredentials {
+        val scheme = providerConfig.auth.scheme
+        if (scheme != AuthScheme.SIGV4 && scheme != AuthScheme.OAUTH2) return SignedCredentials()
+        val signer = CredentialProviders.resolve(scheme) ?: return SignedCredentials()
+        val host = providerConfig.baseUrl.substringAfter("://").substringBefore("/")
+        return signer.sign(providerConfig.auth, SigningContext(method = "POST", host = host, path = path))
+    }
+
+    override suspend fun chatCompletions(request: ChatCompletionRequest): ChatCompletion {
+        val path = providerConfig.endpoints.chat ?: "/v1/chat/completions"
+        val signed = signedFor(path)
+        return requester.performRequest {
             method = HttpMethod.Post
-            url(path = providerConfig.endpoints.chat ?: "/v1/chat/completions")
-            setBody(request)
+            url(path = path)
+            setBody(request.remapped())
             contentType(ContentType.Application.Json)
-            applyAuthAndHeaders(this)
+            applyAuthAndHeaders(this, signed)
         }
+    }
 
     override fun streamChatCompletions(request: ChatCompletionRequest): Flow<ChatCompletionChunk> =
         requester
             .streamRequest<ChatCompletionChunk> {
                 method = HttpMethod.Post
                 url(path = providerConfig.endpoints.chat ?: "/v1/chat/completions")
-                setBody(request.copy(stream = true))
+                setBody(request.remapped().copy(stream = true))
                 contentType(ContentType.Application.Json)
                 accept(ContentType.Text.EventStream)
                 applyAuthAndHeaders(this)
             }
             .catch { e -> emit(ChatCompletionChunk.error(e)) }
 
-    override suspend fun completions(request: CompletionRequest): Completion =
-        requester.performRequest {
+    override suspend fun completions(request: CompletionRequest): Completion {
+        val path = providerConfig.endpoints.completions ?: "/v1/completions"
+        val signed = signedFor(path)
+        return requester.performRequest {
             method = HttpMethod.Post
-            url(path = providerConfig.endpoints.completions ?: "/v1/completions")
-            setBody(request)
+            url(path = path)
+            setBody(request.remapped())
             contentType(ContentType.Application.Json)
-            applyAuthAndHeaders(this)
+            applyAuthAndHeaders(this, signed)
         }
+    }
 
-    override suspend fun generate(request: ImageCreate): ListResponse<Image> =
-        requester.performRequest {
+    override suspend fun generate(request: ImageCreate): ListResponse<Image> {
+        val path = providerConfig.endpoints.imagesGenerations ?: "/v1/images/generations"
+        val signed = signedFor(path)
+        return requester.performRequest {
             method = HttpMethod.Post
-            url(path = providerConfig.endpoints.imagesGenerations ?: "/v1/images/generations")
-            setBody(request)
+            url(path = path)
+            setBody(request.remapped())
             contentType(ContentType.Application.Json)
-            applyAuthAndHeaders(this)
+            applyAuthAndHeaders(this, signed)
         }
+    }
 }
 
 internal fun configHttpRequester(config: ProviderConfig): HttpRequester =
@@ -179,6 +233,62 @@ internal fun legacyConfig(config: ProviderConfig) =
     DefaultOpenAIProviderConfig(apiKey = { config.auth.apiKey }, baseUrl = { config.baseUrl })
 
 /**
+ * Build a config-driven Anthropic (D2) provider. Reuses [AnthropicOpenAIProvider]'s
+ * request/response adapters and content-block SSE streaming; endpoint, key, and
+ * `anthropic-version` come from the [ProviderConfig]. The version is taken from
+ * `auth.extraHeaders["anthropic-version"]` when present, else the client default.
+ */
+internal fun anthropicFrom(config: ProviderConfig): OpenAIProvider {
+    val version =
+        config.auth.extraHeaders.entries
+            .firstOrNull { it.key.equals("anthropic-version", ignoreCase = true) }
+            ?.value
+            ?: com.tddworks.anthropic.api.Anthropic.ANTHROPIC_VERSION
+    val client =
+        com.tddworks.anthropic.api.Anthropic.create(
+            apiKey = config.auth.apiKey,
+            baseUrl = config.baseUrl,
+            anthropicVersion = version,
+        )
+    return AnthropicOpenAIProvider(
+        id = config.id,
+        name = config.name.ifBlank { config.id },
+        config =
+            AnthropicOpenAIProviderConfig(
+                anthropicVersion = { version },
+                apiKey = { config.auth.apiKey },
+                baseUrl = { config.baseUrl },
+            ),
+        client = client,
+    )
+}
+
+/**
+ * Build a config-driven Gemini (D3) native provider. Reuses [GeminiOpenAIProvider]'s
+ * contents/parts adapters and `streamGenerateContent` SSE handling; key and base URL
+ * come from the [ProviderConfig].
+ */
+internal fun geminiFrom(config: ProviderConfig): OpenAIProvider {
+    val client =
+        com.tddworks.gemini.api.textGeneration.api.Gemini.instance(
+            com.tddworks.gemini.api.textGeneration.api.GeminiConfig(
+                apiKey = { config.auth.apiKey },
+                baseUrl = { config.baseUrl },
+            ),
+        )
+    return GeminiOpenAIProvider(
+        id = config.id,
+        name = config.name.ifBlank { config.id },
+        config =
+            GeminiOpenAIProviderConfig(
+                apiKey = { config.auth.apiKey },
+                baseUrl = { config.baseUrl },
+            ),
+        client = client,
+    )
+}
+
+/**
  * Build a provider purely from configuration. Unsupported dialects throw
  * [IllegalArgumentException] so configuration errors surface at load time.
  */
@@ -191,10 +301,33 @@ fun OpenAIProvider.Companion.from(config: ProviderConfig): OpenAIProvider = when
             providerConfig = config,
             requester = configHttpRequester(config),
         )
+    Dialect.ANTHROPIC -> anthropicFrom(config)
+    Dialect.GEMINI -> geminiFrom(config)
     Dialect.RESPONSES -> ResponsesOpenAIProvider.from(config)
     Dialect.TEMPLATE -> mediaProvider(config)
+    // Bedrock is served via its OpenAI-compatible runtime endpoint (spec §D4/§8: "prefer D1
+    // when advertised"). Auth is AWS SigV4 — the built-in [AwsSigV4Signer] is auto-registered
+    // if the host has not installed its own. The native Converse +
+    // application/vnd.amazon.eventstream path is not yet built (needs the binary frame decoder,
+    // §3.3) — configure the D1 runtime endpoint to use Bedrock today.
+    Dialect.BEDROCK -> {
+        if (com.tddworks.openai.gateway.config.CredentialProviders.resolve(AuthScheme.SIGV4) == null) {
+            com.tddworks.openai.gateway.config.CredentialProviders.register(
+                AuthScheme.SIGV4,
+                com.tddworks.openai.gateway.config.AwsSigV4Signer,
+            )
+        }
+        ConfigOpenAIProvider(
+            id = config.id,
+            name = config.name.ifBlank { config.id },
+            config = legacyConfig(config),
+            providerConfig = config,
+            requester = configHttpRequester(config),
+        )
+    }
     else ->
         throw IllegalArgumentException(
-            "Dialect ${config.dialect} is not available in this build (openai-compat, azure-openai, responses)",
+            "Dialect ${config.dialect} is not available in this build " +
+                "(openai-compat, azure-openai, anthropic, gemini, responses, template, bedrock)",
         )
 }

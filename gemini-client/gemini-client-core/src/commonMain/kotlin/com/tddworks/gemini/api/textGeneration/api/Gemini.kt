@@ -1,6 +1,13 @@
 package com.tddworks.gemini.api.textGeneration.api
 
+import com.tddworks.common.network.api.ktor.api.HttpRequester
+import com.tddworks.common.network.api.ktor.internal.ClientFeatures
+import com.tddworks.common.network.api.ktor.internal.UrlBasedConnectionConfig
+import com.tddworks.common.network.api.ktor.internal.createHttpClient
+import com.tddworks.common.network.api.ktor.internal.default
+import com.tddworks.di.createJson
 import com.tddworks.di.getInstance
+import com.tddworks.gemini.api.textGeneration.api.internal.DefaultTextGenerationApi
 import com.tddworks.gemini.di.initGemini
 
 interface Gemini : TextGeneration {
@@ -58,6 +65,30 @@ interface Gemini : TextGeneration {
 
         fun default(): Gemini {
             return object : Gemini, TextGeneration by getInstance() {}
+        }
+
+        /**
+         * Creates a fully instance-scoped Gemini client with no global Koin state.
+         *
+         * Mirrors [com.tddworks.anthropic.api.Anthropic.create]: the HTTP requester and
+         * [TextGeneration] implementation are constructed directly, so multiple independent
+         * clients (e.g. several config-driven providers) can coexist and no global
+         * `startKoin` is triggered. Prefer this over [create] in library/embedded contexts.
+         */
+        fun instance(config: GeminiConfig): Gemini {
+            val requester =
+                HttpRequester.default(
+                    createHttpClient(
+                        connectionConfig = UrlBasedConnectionConfig(config.baseUrl),
+                        features =
+                            ClientFeatures(
+                                json = createJson(),
+                                queryParams = { mapOf("key" to config.apiKey()) },
+                            ),
+                    ),
+                )
+            val textGeneration = DefaultTextGenerationApi(requester = requester)
+            return object : Gemini, TextGeneration by textGeneration {}
         }
 
         fun create(config: GeminiConfig): Gemini {

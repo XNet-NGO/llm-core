@@ -8,7 +8,10 @@ import kotlinx.serialization.json.Json
  * the host (gateway admin portal, config file, DB row) writes one of these and the
  * router interprets it live.
  *
- * `id` is the routing namespace: requests use `id/model-slug`.
+ * `id` is the provider identity: the router resolves a provider by matching the caller's
+ * requested provider against this `id` (or `name`). This core does not parse a
+ * `provider/model-slug` namespace out of the model string — slug-namespace routing, if
+ * needed, is the consuming gateway project's responsibility.
  */
 @Serializable
 data class ProviderConfig(
@@ -32,7 +35,11 @@ data class ProviderConfig(
 
     /** Whether the model id is appended to the image endpoint path (ai/run/{model} style). */
     val imageModelInPath: Boolean = true,
-    val aliases: List<String> = emptyList(),
+    /**
+     * Gateway-level model remap: incoming model slug → upstream model id. Applied by the
+     * provider before dispatching the request. Empty map (default) is a pass-through no-op.
+     */
+    val aliases: Map<String, String> = emptyMap(),
 ) {
     companion object {
         fun fromJson(json: String): ProviderConfig = JsonLenientConfig.decodeFromString(json)

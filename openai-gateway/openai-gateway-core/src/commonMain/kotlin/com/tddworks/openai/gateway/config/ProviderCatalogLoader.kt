@@ -32,9 +32,12 @@ object ProviderCatalogLoader {
             try {
                 val client = HttpClient()
                 try {
+                    val signed = signedCatalogCredentials(config)
                     val response =
                         client.get(url) {
                             applyAuth(config)
+                            signed.headers.forEach { (k, v) -> header(k, v) }
+                            signed.queryParams.forEach { (k, v) -> parameter(k, v) }
                         }
                     if (response.status.isSuccess()) {
                         parseCatalog(response.bodyAsText())
@@ -48,6 +51,19 @@ object ProviderCatalogLoader {
                 emptyList()
             }
         }
+
+    /**
+     * Host-signed credentials for a catalog GET under SIGV4/OAUTH2. Empty for other schemes or
+     * when no signer is registered (graceful degradation, matching [CredentialProviders]).
+     */
+    private suspend fun signedCatalogCredentials(config: ProviderConfig): SignedCredentials {
+        val scheme = config.auth.scheme
+        if (scheme != AuthScheme.SIGV4 && scheme != AuthScheme.OAUTH2) return SignedCredentials()
+        val signer = CredentialProviders.resolve(scheme) ?: return SignedCredentials()
+        val host = config.baseUrl.substringAfter("://").substringBefore("/")
+        val path = config.endpoints.models ?: config.catalog.path
+        return signer.sign(config.auth, SigningContext(method = "GET", host = host, path = path))
+    }
 
     /**
      * Resolve the effective catalog per [Catalog.mode].

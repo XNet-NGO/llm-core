@@ -19,6 +19,8 @@ koin-annotations = "2.3.1"
 koin-core = "4.1.1"
 # Core language and frameworks
 kotlin = "2.2.21"
+# Crypto (KMP) — SigV4 HMAC-SHA256 signing
+kotlincrypto = "0.8.0"
 kotlinx-binary-validator = "0.18.1"
 kotlinx-coroutines = "1.10.2"
 kotlinx-serialization = "1.9.0"
@@ -59,6 +61,9 @@ kotlin-test-junit = { module = "org.jetbrains.kotlin:kotlin-test-junit", version
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
 kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "kotlinx-coroutines" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
+# Crypto (KMP) — pinned explicit versions (org.kotlincrypto), Apache-2.0
+kotlincrypto-macs-hmac-sha2 = { module = "org.kotlincrypto.macs:hmac-sha2", version.ref = "kotlincrypto" }
+kotlincrypto-hash-sha2 = { module = "org.kotlincrypto.hash:sha2", version.ref = "kotlincrypto" }
 ktor-client-auth = { module = "io.ktor:ktor-client-auth", version.ref = "ktor" }
 # Platform-specific HTTP clients
 ktor-client-cio = { module = "io.ktor:ktor-client-cio", version.ref = "ktor" }
