@@ -6,6 +6,7 @@ import kotlinx.serialization.Serializable
 enum class VoiceVendor {
     GEMINI_LIVE,
     OPENAI_REALTIME,
+    QWEN_TTS,
 }
 
 /**

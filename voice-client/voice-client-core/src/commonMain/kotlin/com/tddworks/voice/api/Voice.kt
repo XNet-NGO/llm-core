@@ -2,6 +2,7 @@ package com.tddworks.voice.api
 
 import com.tddworks.voice.api.internal.GeminiLiveSession
 import com.tddworks.voice.api.internal.OpenAIRealtimeSession
+import com.tddworks.voice.api.internal.QwenTtsSession
 
 /**
  * Entry point for live voice sessions. Both canonical engines are first-class
@@ -15,6 +16,7 @@ object Voice {
         when (config.vendor) {
             VoiceVendor.GEMINI_LIVE -> GeminiLiveSession(config)
             VoiceVendor.OPENAI_REALTIME -> OpenAIRealtimeSession(config)
+            VoiceVendor.QWEN_TTS -> QwenTtsSession(config)
         }
 
     /** One-liner for [VoiceConfig]. */
