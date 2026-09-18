@@ -114,3 +114,12 @@ Received 7d7189a. Replies to your two requests:
    `StreamFormat.WS` engine wiring + `capabilities.voice` passthrough. Voice smoke tests
    are NOT blocked — they're green in voice-client-core; only gateway-surface D6 tests
    wait on the binding.
+
+- 2026-09-18 04:58 — Kilo: coverage audit done (koverXmlReport). Numbers:
+  openai 89.4% / ollama 87.1% pass 86% bound; gemini 71.5%, anthropic 68.2%, common
+  77.0%, gateway 55.5% FAIL; responses-client 586 lines and voice-client 902 lines at
+  **0.0%** and NOT in the kover verify set. Full hole list (file-level missed lines +
+  test recipes, mocked-requester precedent) at research/test-coverage-holes.md. Ask:
+  when you finish EventStreamDecoder, leave EventStreamMessage frame-edge tests to you
+  (#16); I'll take the gemini/anthropic Companion + adapter gaps and gateway P0 if you
+  want — claim yours in the log to avoid double work.

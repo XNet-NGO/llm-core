@@ -1,0 +1,96 @@
+# llm-core — Test Coverage Holes (2026-09-18, koverXmlReport)
+
+Goal: 100% line coverage per module. Numbers measured from per-module
+`build/reports/kover/report.xml` after `./gradlew koverXmlReport` (env-gated ITests
+SKIPPED — everything below assumes mocked-HTTP unit tests, precedent:
+`ConfigOpenAIProviderAliasTest`/`AuthTest` with a fake `HttpRequester`).
+
+Kover config facts: verify rule bound = **86%** per project; includes only
+openai/anthropic/gateway/ollama/gemini/common — **responses-client and voice-client are
+NOT in the verify set** (and sit at 0%). Exclusions: lambdas, `$Companion`,
+`$serializer` classes.
+
+## Module totals
+
+| module | line cov | missed | status vs 86% |
+|---|---|---|---|
+| openai-client | 89.4% | 92 | ✅ |
+| ollama-client | 87.1% | 42 | ✅ |
+| gemini-client | 71.5% | 74 | ❌ |
+| anthropic-client | 68.2% | 154 | ❌ |
+| common | 77.0% | 98 | ❌ |
+| openai-gateway-core | **55.5%** | **1046** | ❌ |
+| responses-client | **0.0%** | 586 | ❌ (not even in verify set) |
+| voice-client | **0.0%** | 902 | ❌ (not in verify set) |
+
+## P0 — structural (fix first)
+
+1. **Add `responses-client-core` + `voice-client-core` to the `kover(…)` list** in
+   root `build.gradle.kts` — they are currently invisible to `koverVerify`.
+2. **responses-client: zero test source** (`jvmTest NO-SOURCE`). Needs a serialization
+   suite: `Response`/`ResponseCreateRequest`/`ResponseItem`/`ResponseInputItem`/
+   `ResponseContentPart`/`ResponseStreamEvent` round-trip + stream event parse
+   (586 lines, all uncovered).
+3. **voice-client: 902 lines at 0%** — only env-gated ITests exist (QWEN_KEY etc. skip).
+   Extract/test the deterministic parts with frames injected (or expose internal
+   com.tddworks.voice.api.internal as test-visible):
+   - `GeminiLiveSession` (384): setup-frame JSON, event parsing → SessionReady/AudioDelta
+     (binary), role'd turn encoding, queued-send ordering, generationComplete, error paths.
+   - `QwenTtsSession` (250): run-task/continue-task/finish-task frame builders (JSON
+     golden tests), startQueued ordering, hex audio decode, task-failed mapping.
+   - `OpenAIRealtimeSession` (184): session.update/create/append frame builders, event
+     parse, binary audio emit.
+   - `Voice` facade (30): vendor mapping per `VoiceVendor` incl. unknown-vendor handling
+     if any; `VoiceConfig` defaults (28).
+
+## P0 — gateway-core (1046 missed; the config-driven surface has ~0 mocked tests)
+
+4. **TemplateMediaProvider (282, 0%)** — every branch is smoke-only today:
+   media submit (multipart vs json input), binary/raw output capture, url-output
+   extraction, video submit + task poll (succeeded/failed/pending), timeout path,
+   model-in-path true/false. Mock `HttpRequester` per the alias-test precedent.
+5. **ApiDtos (162, 0%)** — serialize/deserialize every DTO used by config surfaces
+   (chat/embeddings/interactions/batch/image/video) incl. unknown-key leniency.
+6. **ProviderCatalogLoader (106, 0%)** — AUTO (fetch+cache TTL), STATIC (no call),
+   MERGED (overlay), path override, non-200, malformed body, signer application on
+   the models GET.
+7. **ConfigApis (94 of 108, 13%)** — embeddings success/error, Interactions create/
+   list/cancel, Batch create/list/retrieve variants.
+8. **OpenAIGateway.kt (76, 0%)** — companion/facade create + getProviders/getProvider
+   selection incl. unknown provider (assert it returns/throws per contract).
+9. **ResponsesOpenAIProvider (56, 0%)** — chatSurface delegation, aliases remap
+   inheritance, stream event → response mapping.
+
+## P1 — finish partial coverage
+
+10. **ConfigOpenAIProvider (114/285)** — remaining branches: multimodal part encoding
+    (image_url, file), `max_completion_tokens` vs `max_tokens`, reasoning delta
+    passthrough, usage-in-stream, alias remap on images/completions paths, signedFor
+    non-2xx, empty-aliases no-op.
+11. **CredentialProviders (18)** — SPI lookup, fallback-to-unsigned, signer caching.
+12. **ProviderConfig (14) + CatalogConfig (16) + Capabilities (24)** — fromJson/toJson
+    round-trip, defaults, lenient JSON, unknown keys, `all()`/`chatOnly()`.
+13. **Extensions.kt (12 of 12)** — currently ~0%: any remap/url helpers.
+14. **gemini 71.5% / anthropic 68.2%** — the Companion `create` overloads (env-gated
+    ITests only) + internal adapters: mock-based tests for `Gemini.create(…)/instance(…)`
+    and `Anthropic.create(…)` variants; adapters (AnthropicApi ext, message→request
+    mapping) unit tests.
+
+## P2 — common (98 missed)
+
+15. **AnySerializer (64, 0%)** — full serialize/deserialize matrix incl. nested
+    objects/arrays/numbers-as-strings; biggest single-file win in common.
+16. **EventStreamDecoder (20/104, 80.8%)** — EventStreamMessage framing edge cases
+    (boundary splits, int32 read overflow) — kiro-cli WIP; finish + cover.
+17. **ListResponse (4), HostPortConnectionConfig (4), ConnectionConfig (2)** — defaults
+    and parsing.
+18. **Stream.kt (2)** — near-complete after hardening tests; close the last two lines.
+
+## Notes
+
+- Env-gated ITests keep zeroing whole files when keys are absent; gate them with
+  `@EnabledIfEnvironmentVariable` as today but NEVER let a file depend on them for
+  coverage — mocked-requester unit tests are the path to 100%.
+- Re-run `./gradlew koverVerify` after each batch; expect per-module verdicts.
+- kiro-cli is mid-flight on EventStreamDecoder (§3.3) — coordinate: don't both write
+  EventStreamDecoderTest.kt; this file's #16 entry is his.
