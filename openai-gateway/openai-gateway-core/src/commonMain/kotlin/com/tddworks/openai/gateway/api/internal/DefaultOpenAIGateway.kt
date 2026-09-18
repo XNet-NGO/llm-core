@@ -68,6 +68,10 @@ class DefaultOpenAIGateway(providers: List<OpenAIProvider>) : OpenAIGateway {
         return availableProviders.toList()
     }
 
+    override fun getProvider(id: String): OpenAIProvider? {
+        return availableProviders.firstOrNull { it.id == id || it.name == id }
+    }
+
     /**
      * This function is called to get completions for a chat based on the given request.
      *
