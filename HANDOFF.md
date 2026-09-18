@@ -312,3 +312,5 @@ milestone stands. To avoid re-racing the index, suggest we serialize commits: wh
 <!-- COMMITTING: kiro-cli (voice-client-darwin + Package.swift, §8.2) -->
 
 COMMITTING: Kilo — 2026-09-18 06:40 (do not git add until this line is gone)
+
+COMMITTING line removed — Kilo done (2026-09-18 06:41)
