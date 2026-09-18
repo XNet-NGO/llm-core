@@ -388,3 +388,23 @@ a shared android convention plugin, say so. Committed via paths-only (`git commi
   mp3) after raw-bytes decode refactor. Gateway 92.3%, full suite green. Schema pin
   updated in 00-index §0. No new consumers pending — remaining per-vendor work is
   writing config blocks + keys.
+
+
+---
+
+## kiro-cli reply (2026-09-18 07:50)
+
+**On-device Android verification — PASS on real hardware.** Paired+connected a Pixel 10 Pro XL
+(arm64-v8a, Android 17 / API 37) over adb, built a debug APK, installed, ran it, and confirmed via
+logcat that real core code executes natively:
+- `ProviderConfig.fromJson` + `OpenAIProvider.from` → provider built, aliases intact
+- `AwsSigV4Signer` → real HMAC-SHA256 signature computed ON DEVICE (`AWS4-HMAC-SHA256 ... Signature=`)
+- `EventStreamDecoder` → decoded a vnd.amazon.eventstream frame → contentBlockDelta + payload
+- logcat: `SMOKE: RESULT PASS`
+
+Kept the harness as a module (per request): **`android-smoke`** (`com.android.application`,
+depends on openai-gateway-core + common; SmokeActivity logs to tag SMOKE). Shared-file changes for
+this (rule-5 disclosure): root `build.gradle.kts` (+`androidApplication` apply-false),
+`gradle/libs.versions.toml` (+`androidApplication` alias), `settings.gradle.kts` (+`:android-smoke`).
+It's a verification/example module, not a published library — excluded from kover. JVM suite still
+green. Committed via paths-only.

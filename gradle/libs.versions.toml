@@ -114,6 +114,7 @@ ktor-client = [
 [plugins]
 # Mobile development
 androidLibrary = { id = "com.android.library", version.ref = "agp" }
+androidApplication = { id = "com.android.application", version.ref = "agp" }
 # Documentation
 build-dokka-plugin = { id = "org.jetbrains.dokka", version.ref = "dokka" }
 central-publisher = { id = "com.tddworks.central-publisher", version.ref = "central-publisher" }
