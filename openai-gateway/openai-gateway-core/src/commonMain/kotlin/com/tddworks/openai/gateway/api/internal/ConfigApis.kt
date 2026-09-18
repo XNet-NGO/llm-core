@@ -11,6 +11,7 @@ import com.tddworks.openai.gateway.config.InteractionRequest
 import com.tddworks.openai.gateway.config.InteractionResponse
 import com.tddworks.openai.gateway.config.ProviderConfig
 import io.ktor.client.HttpClient
+import io.ktor.client.plugins.timeout
 import io.ktor.client.request.forms.MultiPartFormDataContent
 import io.ktor.client.request.forms.formData
 import io.ktor.client.request.header
@@ -82,6 +83,7 @@ internal class ConfigInteractionsApi(
         try {
             val response =
                 client.post(providerConfig.baseUrl.trimEnd('/') + path) {
+                    timeout { requestTimeoutMillis = providerConfig.timeoutMs }
                     header("x-goog-api-key", providerConfig.auth.apiKey)
                     providerConfig.auth.extraHeaders.filterKeys { it.lowercase() != "authorization" }
                         .forEach { (k, v) -> header(k, v) }
@@ -98,6 +100,7 @@ internal class ConfigInteractionsApi(
         try {
             val response =
                 client.get(providerConfig.baseUrl.trimEnd('/') + path + "/$id") {
+                    timeout { requestTimeoutMillis = providerConfig.timeoutMs }
                     header("x-goog-api-key", providerConfig.auth.apiKey)
                 }
             return json.decodeFromString(response.bodyOrThrow())

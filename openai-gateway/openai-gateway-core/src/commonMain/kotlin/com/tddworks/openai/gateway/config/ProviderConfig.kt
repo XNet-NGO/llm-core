@@ -29,6 +29,9 @@ data class ProviderConfig(
 
     /** Template-dialect image response style: `json` (base64 in result.image) or `raw` (binary body). */
     val imageOutput: String = "json",
+
+    /** Whether the model id is appended to the image endpoint path (ai/run/{model} style). */
+    val imageModelInPath: Boolean = true,
     val aliases: List<String> = emptyList(),
 ) {
     companion object {
