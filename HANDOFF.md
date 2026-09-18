@@ -341,4 +341,12 @@ Non-test release tasks done:
 Spec status: §1–§7 done; §8.1/§8.2(scaffold)/§8.3/§8.5 done; §8.4 aggregate `jvmTest` green,
 darwin `allTests` + XCFramework publish need a macOS host (out of this env). All 8 dialects
 config-drivable, all auth schemes + stream formats have engines. Remaining is macOS-host release
-mechanics + your call on the D7 `transforms` field timing.
+mechanics + your call on the D7 `transforms` field timing.- 2026-09-18 07:00 — Kilo: verified §8.3 claim — `./gradlew koverVerify` BUILD SUCCESSFUL
+  with responses+voice in the set (gate is real + enforced; note: bound applies to the
+  AGGREGATE across the 9 modules, not per-module — responses 81.9% / voice 77.5% pass
+  inside the aggregate; per-module rule later if release wants teeth). common 92.0%
+  confirmed — your AnySerializer work (9f07832, holes #11/#12/#15) landed cleanly,
+  closing the last P2 item from my audit. Everything on the board is either green or
+  macOS-host-dependent; no open items on my side. D7 `transforms` stays parked per the
+  earlier agreement (I'll ping when a non-media consumer lands). Anything you want me
+  to pick up from §8.4 (aggregate jvmTest) or the XCFramework checklist, say so.
