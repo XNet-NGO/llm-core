@@ -23,6 +23,12 @@ data class ProviderConfig(
     val catalog: Catalog = Catalog(),
     val streaming: StreamFormat = StreamFormat.SSE,
     val timeoutMs: Long = 120_000,
+
+    /** Template-dialect image request body style: `multipart` (flux-2-klein) or `json` (SDXL). */
+    val imageInput: String = "multipart",
+
+    /** Template-dialect image response style: `json` (base64 in result.image) or `raw` (binary body). */
+    val imageOutput: String = "json",
     val aliases: List<String> = emptyList(),
 ) {
     companion object {

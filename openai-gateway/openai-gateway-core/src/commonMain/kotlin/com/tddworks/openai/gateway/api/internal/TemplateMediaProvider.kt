@@ -19,9 +19,14 @@ import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
+import io.ktor.client.statement.readRawBytes
+import io.ktor.http.ContentType
+import io.ktor.http.content.TextContent
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import kotlin.time.ExperimentalTime
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
@@ -69,23 +74,42 @@ class TemplateMediaProvider(
                 client.post("$base$runPath/$model") {
                     header("Authorization", "Bearer ${providerConfig.auth.apiKey}")
                     providerConfig.auth.extraHeaders.forEach { (k, v) -> header(k, v) }
-                    setBody(
-                        MultiPartFormDataContent(
-                            formData {
-                                append("prompt", request.prompt)
-                            },
-                        ),
-                    )
+                    when (providerConfig.imageInput.lowercase()) {
+                        "json" ->
+                            setBody(
+                                TextContent(
+                                    json.encodeToString(buildJsonObject { put("prompt", request.prompt) }),
+                                    ContentType.Application.Json,
+                                ),
+                            )
+                        else ->
+                            setBody(
+                                MultiPartFormDataContent(
+                                    formData {
+                                        append("prompt", request.prompt)
+                                    },
+                                ),
+                            )
+                    }
                 }
             if (!response.status.isSuccess()) {
                 throw IllegalStateException(
                     "image generation failed: HTTP ${response.status.value} ${response.bodyAsText().take(200)}",
                 )
             }
-            val root = json.parseToJsonElement(response.bodyAsText()).jsonObject
             val imageB64 =
-                root["result"]?.jsonObject?.get("image")?.jsonPrimitive?.contentOrNull
-                    ?: throw IllegalStateException("image response missing result.image: ${root.keys}")
+                when (providerConfig.imageOutput.lowercase()) {
+                    "raw" -> {
+                        @OptIn(kotlin.io.encoding.ExperimentalEncodingApi::class)
+                        val bytes = response.readRawBytes()
+                        kotlin.io.encoding.Base64.encode(bytes)
+                    }
+                    else -> {
+                        val root = json.parseToJsonElement(response.bodyAsText()).jsonObject
+                        root["result"]?.jsonObject?.get("image")?.jsonPrimitive?.contentOrNull
+                            ?: throw IllegalStateException("image response missing result.image: ${root.keys}")
+                    }
+                }
             return ListResponse(
                 created = kotlin.time.Clock.System.now().epochSeconds,
                 data = listOf(Image(url = null, b64JSON = imageB64)),
