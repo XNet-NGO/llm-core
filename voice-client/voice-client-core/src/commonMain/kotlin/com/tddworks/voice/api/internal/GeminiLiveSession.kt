@@ -37,6 +37,10 @@ import kotlinx.serialization.json.put
  * `functionCall` parts / `toolCall` messages. Session readiness is signaled by the
  * server's `setupComplete` frame.
  */
+// Multiplatform-safe debug gate (was System.getenv("LLMCORE_DEBUG")=="1", JVM-only).
+// Flip to true locally when tracing the live-voice wire protocol.
+private const val VOICE_DEBUG = false
+
 internal class GeminiLiveSession(private val config: VoiceConfig) : VoiceSession {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -56,9 +60,9 @@ internal class GeminiLiveSession(private val config: VoiceConfig) : VoiceSession
             client.webSocket(urlString = wsUrl(), request = {}) {
                 val session = this
                 outbound = session.outgoing
-                if (System.getenv("LLMCORE_DEBUG") == "1") println("GEMINI-LIVE WS OPENED url=${wsUrl()}")
+                if (VOICE_DEBUG) println("GEMINI-LIVE WS OPENED url=${wsUrl()}")
                 session.outgoing.send(Frame.Text(json.encodeToString(setupMessage())))
-                if (System.getenv("LLMCORE_DEBUG") == "1") println("GEMINI-LIVE SETUP SENT")
+                if (VOICE_DEBUG) println("GEMINI-LIVE SETUP SENT")
                 launch {
                     for (payload in pendingSends) {
                         session.outgoing.send(Frame.Text(payload))
@@ -72,7 +76,7 @@ internal class GeminiLiveSession(private val config: VoiceConfig) : VoiceSession
                             else -> null
                         }
                     if (text == null) continue
-                    if (System.getenv("LLMCORE_DEBUG") == "1") println("GEMINI-LIVE RAW: $text")
+                    if (VOICE_DEBUG) println("GEMINI-LIVE RAW: $text")
                     parseEvents(text).forEach { eventsFlow.tryEmit(it) }
                 }
             }
@@ -147,7 +151,7 @@ internal class GeminiLiveSession(private val config: VoiceConfig) : VoiceSession
 
     private fun send(message: JsonObject) {
         val payload = json.encodeToString(message)
-        if (System.getenv("LLMCORE_DEBUG") == "1") println("GEMINI-LIVE OUT: $payload")
+        if (VOICE_DEBUG) println("GEMINI-LIVE OUT: $payload")
         pendingSends.trySend(payload)
     }
 

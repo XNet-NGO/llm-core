@@ -17,6 +17,7 @@ kotlin {
             api(projects.anthropicClient.anthropicClientCore)
             api(projects.ollamaClient.ollamaClientCore)
             api(projects.responsesClient.responsesClientCore)
+            api(projects.voiceClient.voiceClientCore)
             // Crypto for AWS SigV4 signing (HMAC-SHA256 + SHA-256), KMP
             implementation(libs.kotlincrypto.macs.hmac.sha2)
             implementation(libs.kotlincrypto.hash.sha2)

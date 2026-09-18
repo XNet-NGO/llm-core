@@ -325,6 +325,13 @@ fun OpenAIProvider.Companion.from(config: ProviderConfig): OpenAIProvider = when
             requester = configHttpRequester(config),
         )
     }
+    // Voice is duplex/audio, not the chat-oriented OpenAIProvider surface — build it with
+    // OpenAIProvider.voiceSession(config) instead (see VoiceProvider.kt).
+    Dialect.VOICE_REALTIME ->
+        throw IllegalArgumentException(
+            "VOICE_REALTIME is a live-audio dialect; build it with OpenAIProvider.voiceSession(config), " +
+                "not OpenAIProvider.from(config)",
+        )
     else ->
         throw IllegalArgumentException(
             "Dialect ${config.dialect} is not available in this build " +

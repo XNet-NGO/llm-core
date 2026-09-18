@@ -53,7 +53,7 @@ internal class QwenTtsSession(private val config: VoiceConfig) : VoiceSession {
     private val pendingSends = Channel<String>(Channel.UNLIMITED)
     private var outbound: SendChannel<Frame>? = null
     private var taskEstablished = false
-    private val taskId = "tts_ss_${System.currentTimeMillis()}"
+    private val taskId = "tts_ss_${io.ktor.util.date.GMTDate().timestamp}"
     private val startQueued = CompletableDeferred<Unit>()
 
     override val events: Flow<VoiceEvent> = eventsFlow

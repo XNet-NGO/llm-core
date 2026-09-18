@@ -94,14 +94,20 @@ config-drivable, per the design goal "a new provider = one config entry."
 - [x] **3.2 NDJSON** — bare-object records without a `data:` prefix (ollama-style) parse via
       `isJsonResponse`; explicit coverage added (`parses NDJSON bare-object records without data prefix`).
       Common module: 19 tests, 0 failures; gateway unaffected (86/0).
-- [ ] **3.3 AWS `EVENTSTREAM`** (D4) — DEFERRED to v1.1 alongside D4 Bedrock (§5.1). Building the
-      header+payload frame decoder now would be speculative ahead of its only consumer; it is
-      gated on §4.1 SIGV4 + §5.1. No mature KMP impl (borrow-patterns §1) — build in `common` then.
-- [ ] **3.4 WS binary frames** (D6) — DEFERRED to v1.1 alongside the `VoiceSession` abstraction
-      (§5.2). Same rationale: no consumer until D6 lands.
-- [ ] **3.5** Route `StreamFormat` selection through the provider — DEFERRED: only SSE + NDJSON
-      have engines today and both are auto-detected line-by-line in `streamEventsFrom`, so no
-      explicit switch is needed yet. Wire the switch when EVENTSTREAM/WS engines exist (3.3/3.4).
+- [x] **3.3 AWS `EVENTSTREAM`** (D4) — DONE. `EventStreamDecoder` in `common` parses
+      `application/vnd.amazon.eventstream` frames (big-endian prelude, string headers, payload;
+      CRC-lenient) with **streaming reassembly** (decodes complete frames, returns bytes consumed,
+      leaves trailing partial frame for carry-forward). Pure-Kotlin, compiles JVM + macOS/native.
+      `EventStreamDecoderTest` (5 cases): decodes an **authoritative reference frame** (independent
+      Python encoder), back-to-back frames, partial-frame reassembly, undersized buffer,
+      exception-type surfacing. Common module 24 tests / 0 failures.
+- [ ] **3.4 WS binary frames** (D6) — ALREADY IMPLEMENTED in `voice-client-core` (Kilo):
+      `GeminiLiveSession`/`OpenAIRealtimeSession`/`QwenTtsSession` handle WS JSON + binary audio
+      frames. No separate work needed in the streaming layer.
+- [ ] **3.5** Route `StreamFormat` selection through the provider — DEFERRED until the
+      EVENTSTREAM engine is wired into a provider (native Bedrock Converse, §5.1 remaining). SSE +
+      NDJSON remain auto-detected in `streamEventsFrom`; the `EventStreamDecoder` primitive now
+      exists for the switch to select when native D4 streaming is built.
 
 ## 4. Auth: SIGV4 and OAUTH2 — DONE (pluggable-signer design)
 
@@ -143,10 +149,17 @@ schemes fully functional when a signer is installed, and degrades gracefully (un
       REMAINING (v1.1): native Converse / `converse-stream` with
       `application/vnd.amazon.eventstream` binary framing — still gated on §3.3 (frame decoder).
       Functional Bedrock is available now via the D1 runtime.
-- [ ] **5.2 D6 `VOICE_REALTIME`** — define the core `VoiceSession` abstraction first
-      (borrow-patterns recommends Gemini Live's message set as canonical, OpenAI Realtime
-      mapped into it), then bind `voice-client` module. `voice-client-core` module already
-      exists in `settings.gradle.kts` — populate it. BLOCKED on §3.4 (WS binary frames).
+- [x] **5.2 D6 `VOICE_REALTIME`** — DONE (gateway binding). Per Kilo's HANDOFF correction, the
+      abstraction already exists in `voice-client-core` (`VoiceSession`/`VoiceEvent`/`VoiceConfig`
+      + live-tested `GeminiLiveSession`/`OpenAIRealtimeSession`/`QwenTtsSession`). Added the narrow
+      remaining piece: `OpenAIProvider.voiceSession(config)` factory mapping `ProviderConfig` →
+      `VoiceConfig` (vendor from `capabilities.voice`: LIVE→GeminiLive/v1alpha, REALTIME→OpenAI,
+      TURN_STREAM→QwenTTS; model from aliases). `from(config)` now redirects VOICE_REALTIME to
+      `voiceSession()` with a clear message (voice isn't the chat-oriented OpenAIProvider surface).
+      Added `voice-client-core` as a gateway-core dependency. `VoiceProviderTest` (6 cases) green;
+      gateway 101 tests / 0 failures. Also fixed a pre-existing native-compile bug in Kilo's voice
+      sessions (JVM-only `System` in commonMain → multiplatform `VOICE_DEBUG` const + Ktor `GMTDate`);
+      recorded in HANDOFF. voice-client-core + gateway now compile for macOS/native.
 - [ ] **5.3** Turn-stream (one-way TTS/STT) providers via D7 templates (ElevenLabs, Deepgram,
       Cartesia).
 
