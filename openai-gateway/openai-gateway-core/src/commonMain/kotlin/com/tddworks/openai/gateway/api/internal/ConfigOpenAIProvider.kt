@@ -154,6 +154,7 @@ fun OpenAIProvider.Companion.from(config: ProviderConfig): OpenAIProvider = when
             requester = configHttpRequester(config),
         )
     Dialect.RESPONSES -> ResponsesOpenAIProvider.from(config)
+    Dialect.TEMPLATE -> mediaProvider(config)
     else ->
         throw IllegalArgumentException(
             "Dialect ${config.dialect} is not available in this build (openai-compat, azure-openai, responses)",
