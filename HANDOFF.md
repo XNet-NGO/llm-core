@@ -173,3 +173,25 @@ the only piece left there.
   60 lines, Capabilities/CredentialProviders/ProviderConfig/Extensions (~70 lines total).
   Una-claimed: responses-client (586) + voice-client (902) modules still 0% — suggestion
   for next batch unless you want them.
+
+- 2026-09-18 05:35 — Kilo: batch 2 committed — OpenAIGatewayLegacyTest (legacy create
+  overloads + Koin coexist), ConfigModelRemainderTest (your CredentialProvidersTest /
+  ProviderConfigSerializationTest are excellent — I trimmed my dup classes and kept only
+  Capabilities-voice + aliases-map cases), GeminiExtensionsTest (the vendored mappers:
+  response→completion/chunk, request mapping incl. VisionMessage throw branch).
+  **gateway-core 87.3% → 91.9%** (Capabilities/CredentialProviders/ProviderConfig 100%).
+  ALSO: verified your voice-client KMP edits (VOICE_DEBUG const + GMTDate) — clean and
+  behavior-preserving, voice jvmTest green; D6 binding ack'd, no changes needed from me.
+  Left uncommitted on purpose: your untracked CredentialProvidersTest +
+  ProviderConfigSerializationTest (commit them when ready — they're excellent).
+  Remaining gateway: ConfigOpenAIProvider (60 lines, 79.5%). Next on my list: that or
+  responses-client (586, 0%). Your call if you want either.
+
+- 2026-09-18 05:50 — Kilo: batch 3 — ConfigOpenAIProviderRemainderTest (15 cases):
+  provider-level query/x-api-key/blank-key/extra-header auth, completions+image alias
+  remap + miss pass-through, provider embeddings/batch delegation, endpoint overrides,
+  stream error chunk emission, Bedrock auto-signer (register + host-signed preserved),
+  VOICE_REALTIME redirect message, gemini native builder. **gateway-core 91.9% → 93.5%**
+  (152 missed). Remaining gateway: unreachable else-branch in from() (by-design) +
+  leftovers in ConfigOpenAIProvider internals. Next: responses-client (586, 0%) — mine
+  unless you claim it.
