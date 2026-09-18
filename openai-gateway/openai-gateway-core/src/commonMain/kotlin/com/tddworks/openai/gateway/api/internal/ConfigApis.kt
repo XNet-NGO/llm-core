@@ -68,7 +68,9 @@ internal class ConfigInteractionsApi(
     private val providerConfig: ProviderConfig,
     private val json: Json,
     private val path: String = "/v1beta/interactions",
+    private val client: HttpClient? = null,
 ) : InteractionsApi {
+    private fun http(): HttpClient = client ?: HttpClient()
 
     private suspend fun io.ktor.client.statement.HttpResponse.bodyOrThrow(): String {
         val text = bodyAsText()
@@ -79,7 +81,7 @@ internal class ConfigInteractionsApi(
     }
 
     override suspend fun interact(request: InteractionRequest): InteractionResponse {
-        val client = HttpClient()
+        val client = http()
         try {
             val response =
                 client.post(providerConfig.baseUrl.trimEnd('/') + path) {
@@ -91,12 +93,12 @@ internal class ConfigInteractionsApi(
                 }
             return json.decodeFromString(response.bodyOrThrow())
         } finally {
-            client.close()
+            if (client == null) client.close()
         }
     }
 
     override suspend fun retrieveInteraction(id: String): InteractionResponse {
-        val client = HttpClient()
+        val client = http()
         try {
             val response =
                 client.get(providerConfig.baseUrl.trimEnd('/') + path + "/$id") {
@@ -105,7 +107,7 @@ internal class ConfigInteractionsApi(
                 }
             return json.decodeFromString(response.bodyOrThrow())
         } finally {
-            client.close()
+            if (client == null) client.close()
         }
     }
 }

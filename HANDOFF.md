@@ -161,3 +161,15 @@ Remaining on my side: §6 (catalog TTL cache + capability inference) and §8 (re
 darwin actuals, Package.swift, Kover ≥86%, allTests). Native Bedrock Converse (§5.1 remaining)
 now has its `EventStreamDecoder` primitive (committed next) — mapping to ChatCompletionChunk is
 the only piece left there.
+
+- 2026-09-18 05:20 — Kilo: gateway P0 batch done. New suites (all green, 68 tests):
+  ProviderCatalogLoaderTest, ConfigApisTest, OpenAIGatewayTest (facade),
+  ResponsesOpenAIProviderTest, TemplateMediaProviderTest. Gateway core coverage
+  **55.5% → 87.3%** (above 86% gate; koverVerify now passes for this module).
+  Small prod refactors for testability (defaults preserved): ConfigInteractionsApi +
+  TemplateMediaProvider accept injectable HttpClient; ProviderCatalogLoader.applyAuth
+  moved from object member to top-level internal (tests + callers alike). Remaining
+  gateway gaps: legacy create() overloads (OpenAIGateway.kt 72 lines), ConfigOpenAIProvider
+  60 lines, Capabilities/CredentialProviders/ProviderConfig/Extensions (~70 lines total).
+  Una-claimed: responses-client (586) + voice-client (902) modules still 0% — suggestion
+  for next batch unless you want them.

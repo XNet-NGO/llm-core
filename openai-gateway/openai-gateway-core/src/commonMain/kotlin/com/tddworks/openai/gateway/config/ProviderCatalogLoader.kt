@@ -106,32 +106,34 @@ object ProviderCatalogLoader {
             emptyList()
         }
 
-    internal fun io.ktor.client.request.HttpRequestBuilder.applyAuth(config: ProviderConfig) {
-        when (config.auth.scheme) {
-            AuthScheme.BEARER -> {
-                if (config.auth.apiKey.isNotEmpty()) {
-                    header("Authorization", "Bearer ${config.auth.apiKey}")
-                }
-            }
-            AuthScheme.X_API_KEY -> {
-                if (config.auth.apiKey.isNotEmpty()) {
-                    header(config.auth.keyHeader.ifBlank { "X-API-Key" }, config.auth.apiKey)
-                }
-            }
-            AuthScheme.QUERY -> {
-                if (config.auth.apiKey.isNotEmpty()) {
-                    parameter(config.auth.queryParam.ifBlank { "api_key" }, config.auth.apiKey)
-                }
-            }
-            AuthScheme.NONE -> {}
-            AuthScheme.SIGV4, AuthScheme.OAUTH2 -> {
-                // Host-provided signer/oauth layer attaches credentials at request time.
-            }
-        }
-        config.auth.extraHeaders.forEach { (k, v) -> header(k, v) }
-        config.auth.queryParams.forEach { (k, v) -> parameter(k, v) }
-    }
 
     private fun stringList(el: JsonElement?): List<String> =
         el?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
+}
+
+/** Applies the provider's auth scheme + static headers/query params to a request builder. */
+internal fun io.ktor.client.request.HttpRequestBuilder.applyAuth(config: ProviderConfig) {
+    when (config.auth.scheme) {
+        AuthScheme.BEARER -> {
+            if (config.auth.apiKey.isNotEmpty()) {
+                header("Authorization", "Bearer ${config.auth.apiKey}")
+            }
+        }
+        AuthScheme.X_API_KEY -> {
+            if (config.auth.apiKey.isNotEmpty()) {
+                header(config.auth.keyHeader.ifBlank { "X-API-Key" }, config.auth.apiKey)
+            }
+        }
+        AuthScheme.QUERY -> {
+            if (config.auth.apiKey.isNotEmpty()) {
+                parameter(config.auth.queryParam.ifBlank { "api_key" }, config.auth.apiKey)
+            }
+        }
+        AuthScheme.NONE -> {}
+        AuthScheme.SIGV4, AuthScheme.OAUTH2 -> {
+            // Host-provided signer/oauth layer attaches credentials at request time.
+        }
+    }
+    config.auth.extraHeaders.forEach { (k, v) -> header(k, v) }
+    config.auth.queryParams.forEach { (k, v) -> parameter(k, v) }
 }

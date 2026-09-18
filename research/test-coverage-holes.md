@@ -19,7 +19,7 @@ NOT in the verify set** (and sit at 0%). Exclusions: lambdas, `$Companion`,
 | gemini-client | 71.5% | 74 | ❌ |
 | anthropic-client | 68.2% | 154 | ❌ |
 | common | 77.0% | 98 | ❌ |
-| openai-gateway-core | **55.5%** | **1046** | ❌ |
+| openai-gateway-core | **87.3%** ✅ (was 55.5%) | 300 | pass |
 | responses-client | **0.0%** | 586 | ❌ (not even in verify set) |
 | voice-client | **0.0%** | 902 | ❌ (not in verify set) |
 
@@ -51,15 +51,18 @@ NOT in the verify set** (and sit at 0%). Exclusions: lambdas, `$Companion`,
    model-in-path true/false. Mock `HttpRequester` per the alias-test precedent.
 5. **ApiDtos (162, 0%)** — serialize/deserialize every DTO used by config surfaces
    (chat/embeddings/interactions/batch/image/video) incl. unknown-key leniency.
-6. **ProviderCatalogLoader (106, 0%)** — AUTO (fetch+cache TTL), STATIC (no call),
-   MERGED (overlay), path override, non-200, malformed body, signer application on
-   the models GET.
-7. **ConfigApis (94 of 108, 13%)** — embeddings success/error, Interactions create/
-   list/cancel, Batch create/list/retrieve variants.
-8. **OpenAIGateway.kt (76, 0%)** — companion/facade create + getProviders/getProvider
-   selection incl. unknown provider (assert it returns/throws per contract).
-9. **ResponsesOpenAIProvider (56, 0%)** — chatSurface delegation, aliases remap
-   inheritance, stream event → response mapping.
+6. **ProviderCatalogLoader — DONE 92.5%** (Kilo, 2026-09-18:
+   ProviderCatalogLoaderTest — parse snake/camel/malformed, resolve AUTO/STATIC/MERGED,
+   applyAuth per scheme, signer invocation).
+7. **ConfigApis — DONE 100%** (Kilo: ConfigApisTest — embeddings, batch file/CRUD,
+   interactions auth/body/error/retrieve; injection param added for client).
+8. **OpenAIGateway facade — PARTIAL** (Kilo: create(configs)/disabled-filter/getProvider
+   covered; remaining 72 lines = legacy create(key-lambda) overloads + Koin DI path).
+9. **ResponsesOpenAIProvider — DONE 89.3%** (Kilo: ResponsesOpenAIProviderTest —
+   chat/responses delegation with fake client + from() name fallback).
+10. **TemplateMediaProvider — DONE 95.8%** (Kilo: TemplateMediaProviderTest — URL/model-
+    in-path, auth, json/qwen/multipart input, url/json/raw output, video submit/poll,
+    error paths; client injection param added).
 
 ## P1 — finish partial coverage
 

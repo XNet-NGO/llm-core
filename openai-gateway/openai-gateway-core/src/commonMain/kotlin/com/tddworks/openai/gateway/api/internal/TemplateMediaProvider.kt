@@ -59,9 +59,12 @@ class TemplateMediaProvider(
     override val name: String,
     override val config: OpenAIProviderConfig,
     private val providerConfig: ProviderConfig,
+    private val client: HttpClient? = null,
 ) : OpenAIProvider, VideoGenerationApi {
 
     private val json = Json { isLenient = true; ignoreUnknownKeys = true }
+
+    private fun http(): HttpClient = client ?: HttpClient()
 
     /** Qwen multimodal-generation body: nested messages with a text part + parameters. */
     private fun qwenBody(request: ImageCreate): JsonObject =
@@ -123,10 +126,10 @@ class TemplateMediaProvider(
             } else {
                 "$base$runPath"
             }
-        val client = HttpClient()
+        val http = http()
         try {
             val response =
-                client.post(url) {
+                http.post(url) {
                     timeout { requestTimeoutMillis = providerConfig.timeoutMs }
                     header("Authorization", "Bearer ${providerConfig.auth.apiKey}")
                     providerConfig.auth.extraHeaders.forEach { (k, v) -> header(k, v) }
@@ -194,7 +197,7 @@ class TemplateMediaProvider(
                 data = listOf(Image(url = imageUrl, b64JSON = imageB64)),
             )
         } finally {
-            client.close()
+            if (client == null) http.close()
         }
     }
 
@@ -202,10 +205,10 @@ class TemplateMediaProvider(
         val base = providerConfig.baseUrl.trimEnd('/')
         val path = providerConfig.endpoints.videos
             ?: "/api/v1/services/aigc/video-generation/video-synthesis"
-        val client = HttpClient()
+        val http = http()
         try {
             val response =
-                client.post(base + path) {
+                http.post(base + path) {
                     timeout { requestTimeoutMillis = providerConfig.timeoutMs }
                     header("Authorization", "Bearer ${providerConfig.auth.apiKey}")
                     header("X-DashScope-Async", "enable")
@@ -235,7 +238,7 @@ class TemplateMediaProvider(
             val root = json.parseToJsonElement(response.bodyAsText()).jsonObject
             return json.decodeFromJsonElement(root["output"] ?: root)
         } finally {
-            client.close()
+            if (client == null) http.close()
         }
     }
 
@@ -243,10 +246,10 @@ class TemplateMediaProvider(
         val base = providerConfig.baseUrl.trimEnd('/')
         val path =
             (providerConfig.endpoints.tasks ?: "/api/v1/tasks") + "/$taskId"
-        val client = HttpClient()
+        val http = http()
         try {
             val response =
-                client.get(base + path) {
+                http.get(base + path) {
                     timeout { requestTimeoutMillis = providerConfig.timeoutMs }
                     header("Authorization", "Bearer ${providerConfig.auth.apiKey}")
                 }
@@ -256,7 +259,7 @@ class TemplateMediaProvider(
             val root = json.parseToJsonElement(response.bodyAsText()).jsonObject
             return json.decodeFromJsonElement(root["output"] ?: root)
         } finally {
-            client.close()
+            if (client == null) http.close()
         }
     }
 }
