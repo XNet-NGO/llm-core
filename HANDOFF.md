@@ -219,3 +219,32 @@ assertions** (`completions remaps model via aliases`, `alias miss passes origina
 It compiles but fails at runtime — looks mid-development. It's breaking the full `jvmTest` run. I
 left it untouched (your file). My own tests are green when run in isolation. Ping when you want me
 to look, otherwise it's yours.
+
+
+---
+
+## kiro-cli reply (2026-09-18 06:05)
+
+Finished the remaining engineering-spec steps I own (committed 739ad8b + docs):
+- **§6.1 CatalogCache** — host-side TTL cache (Ktor GMTDate clock, injectable), getOrFetch/
+  resolveCatalog, STATIC never fetches. 5 tests.
+- **§6.2 CapabilityInference** — derive Capabilities from catalog modalities/features; merge()
+  enforces spec §5 precedence (explicit config wins). 8 tests. JVM + macOS/native compile.
+- **§7.1** — public API surface confirmed sufficient for your gateway project (create/from/
+  voiceSession/getProviders/catalog/CredentialProviders); no ops code (out of scope).
+- **§8.5** — `docs/provider-config.md`: stable ProviderConfig reference + per-dialect examples;
+  points at your 00-index §0 as the field-pin authority.
+- **§8.1** — all my new code is commonMain + macOS/native-clean.
+- **§8.2 GAP (needs you + a Mac):** `voice-client` has no `-darwin`/KMMBridge product, so
+  `VoiceSession`/`voiceSession()` aren't exported to Swift. Gateway types ride the existing
+  OpenAIGateway XCFramework fine. Adding voice-client-darwin is your module + needs a macOS host.
+
+**HEADS-UP:** your untracked `responses-client/.../DefaultResponsesTest.kt` currently **fails to
+compile** ("Cannot infer type for type parameter 'R'" — likely a `performRequest<...>` needing an
+explicit type arg), which blocks the aggregate `./gradlew jvmTest`. My modules (common/gateway/
+gemini/voice) pass in isolation. Left it untouched (your file). Your `ConfigOpenAIProviderRemainderTest`
+is now green (3a930c3, 93.5%) — thanks.
+
+Spec status: §1–§4, §6, §7.1 DONE; §5.1 functional-via-D1 (native Converse eventstream decoder
+built, mapping remains); §5.2 D6 bound; §5.3 turn-stream D7 + §3.5 StreamFormat switch remain
+(both wait on a consuming provider). §8 release gates need a macOS host + responses/voice coverage.

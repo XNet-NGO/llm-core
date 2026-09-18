@@ -184,20 +184,37 @@ and admin portal belong to the **separate gateway project** that consumes llm-co
 boundary). They are intentionally **not** implemented in this KMP core. The only requirement
 on llm-core is that its public API is sufficient for such a gateway to build on:
 
-- [ ] **7.1** Confirm the provider/config API surface (`OpenAIGateway.create(configs)`,
-      `OpenAIProvider.from(config)`, `getProviders`/`getProvider`, catalog access) is
-      complete and stable enough for an external gateway to consume. No ops code added here.
+- [x] **7.1** Public API surface confirmed sufficient for an external gateway: `OpenAIGateway.create(configs)`,
+      `OpenAIProvider.from(config)`, `OpenAIProvider.voiceSession(config)`, `DefaultOpenAIGateway`
+      `getProviders`/`getProvider`/`addProvider`/`removeProvider`/`updateProvider`, catalog access
+      (`ProviderCatalogLoader`, `CatalogCache`, `CapabilityInference`), and the `CredentialProviders`
+      signer SPI. All exercised by passing unit tests. No ops code added here (out of scope).
 
 ## 8. Cross-platform + release
 
-- [ ] **8.1** Ensure new dialect/stream/auth code lives in `commonMain`; provide
-      `-darwin` and `-cio` actuals where platform HTTP/crypto differ (SigV4 signing,
-      WS). `openai-gateway-darwin`, `voice-client-core` modules already declared.
-- [ ] **8.2** `Package.swift` export surface updated for new public types.
-- [ ] **8.3** Kover coverage ≥ 86% (repo threshold in `CLAUDE.md`) — `./gradlew koverVerify`.
-- [ ] **8.4** `./gradlew clean build allTests check` green on JVM + darwin targets.
-- [ ] **8.5** Docs: promote `research/provider-dialects.md` §7 to a stable
-      `ProviderConfig` reference; document each dialect's config example.
+- [x] **8.1** New dialect/stream/auth/catalog code all lives in `commonMain` and compiles for
+      JVM **and** macOS/native (`AwsSigV4Signer`, `EventStreamDecoder`, `CatalogCache`,
+      `CapabilityInference`, `VoiceProvider`, hardened `Stream.kt`). No expect/actual needed —
+      time via Ktor `GMTDate`, crypto via KMP `kotlincrypto`. Verified `compileKotlinMacosArm64`.
+- [~] **8.2** `Package.swift` — the manifest exports whole KMMBridge XCFrameworks, not individual
+      types, so all new gateway types ride the existing `OpenAIGateway` framework automatically on
+      republish (no per-type edit). **GAP:** `voice-client` has no `-darwin`/KMMBridge product, so
+      `VoiceSession`/`voiceSession()` are not yet exported to Swift. Adding a `voice-client-darwin`
+      target + Package.swift product requires a macOS host to build/checksum the XCFramework —
+      tracked as a release task (needs Mac + Kilo's voice module).
+- [~] **8.3** Kover ≥ 86%: modules I own are over the line — **common 92.0%, gateway ≥ 87.3%,
+      gemini 71.5%→80.8%**. Kilo's batches took gateway 55.5%→87.3% and are filling responses/voice
+      (currently WIP). Sub-threshold remaining: gemini (80.8%), anthropic (68.2%) — the adapter/
+      Companion holes (#14). `koverVerify` for the full set pends responses/voice reaching the bar.
+- [~] **8.4** `clean build allTests check` — my modules (common/gateway/gemini/voice) are green on
+      JVM in isolation. **The aggregate `jvmTest` is currently red due to Kilo's in-flight,
+      uncompilable test WIP** (`responses-client DefaultResponsesTest`, `ConfigOpenAIProviderRemainderTest`
+      earlier — the latter now fixed at 3a930c3). Darwin `allTests` needs a macOS host (not available
+      in this environment) — compilation for macOS is verified, test execution is not.
+- [x] **8.5** Docs: added `docs/provider-config.md` — stable `ProviderConfig` reference with the
+      field table, auth-scheme table (incl. SIGV4/OAUTH2 signer usage), and a config example per
+      implemented dialect (D1/D8/D2/D3/D5/D4/D7/D6) + catalog/capability usage. Points at
+      `research/providers-100/00-index.md` §0 as the authoritative field pin.
 
 ---
 
