@@ -31,6 +31,14 @@ let remoteOpenAIGatewayChecksum = "8931a4d77c7e6a240278059f42c40ae5beac1d7c12edf
 let openAIGatewayPackageName = "OpenAIGateway"
 // END KMMBRIDGE BLOCK FOR 'OpenAIGateway'
 
+// VoiceClient: the :voice-client:voice-client-darwin KMMBridge module is registered in
+// settings.gradle.kts and exports voice-client-core (VoiceSession/Voice/VoiceConfig). Its
+// KMMBRIDGE VARIABLES BLOCK + product/binaryTarget are generated on the first macOS publish
+// (`./gradlew :voice-client:voice-client-darwin:kmmBridgePublish` on a Mac). Until then the
+// framework has no URL/checksum, so the product is intentionally not wired here to keep the
+// manifest resolvable. Uncomment/populate after the first darwin publish.
+let voiceClientPackageName = "VoiceClient"
+
 let package = Package(
     name: "openai-kotlin",
     platforms: [
@@ -72,5 +80,7 @@ let package = Package(
          .binaryTarget(name: geminiClientPackageName, url: remoteGeminiClientUrl, checksum: remoteGeminiClientChecksum),
          .binaryTarget(name: ollamaClientPackageName, url: remoteOllamaClientUrl, checksum: remoteOllamaClientChecksum),
          .binaryTarget(name: openAIGatewayPackageName, url: remoteOpenAIGatewayUrl, checksum: remoteOpenAIGatewayChecksum),
+         // VoiceClient (activate after first darwin publish; see note above):
+         // .binaryTarget(name: voiceClientPackageName, url: remoteVoiceClientUrl, checksum: remoteVoiceClientChecksum),
     ]
 )

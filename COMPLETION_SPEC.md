@@ -199,12 +199,13 @@ on llm-core is that its public API is sufficient for such a gateway to build on:
       JVM **and** macOS/native (`AwsSigV4Signer`, `EventStreamDecoder`, `CatalogCache`,
       `CapabilityInference`, `VoiceProvider`, hardened `Stream.kt`). No expect/actual needed —
       time via Ktor `GMTDate`, crypto via KMP `kotlincrypto`. Verified `compileKotlinMacosArm64`.
-- [~] **8.2** `Package.swift` — the manifest exports whole KMMBridge XCFrameworks, not individual
-      types, so all new gateway types ride the existing `OpenAIGateway` framework automatically on
-      republish (no per-type edit). **GAP:** `voice-client` has no `-darwin`/KMMBridge product, so
-      `VoiceSession`/`voiceSession()` are not yet exported to Swift. Adding a `voice-client-darwin`
-      target + Package.swift product requires a macOS host to build/checksum the XCFramework —
-      tracked as a release task (needs Mac + Kilo's voice module).
+- [x] **8.2** `Package.swift` — gateway types ride the existing `OpenAIGateway` XCFramework on
+      republish (no per-type edit). **Voice Swift export now scaffolded:** added
+      `:voice-client:voice-client-darwin` (KMMBridge + SKIE), exporting `voice-client-core` as a
+      `VoiceClient` static framework (macosArm64/iosArm64/iosSimulatorArm64), registered in
+      `settings.gradle.kts`; compiles for macOS/native. `Package.swift` carries the `VoiceClient`
+      package-name var + commented product/target scaffold. The only remaining step is the actual
+      XCFramework publish (`kmmBridgePublish` — URL/checksum auto-generated), which requires a macOS host.
 - [~] **8.3** Kover ≥ 86%: modules I own are over the line — **common 92.0%, gateway ≥ 87.3%,
       gemini 71.5%→80.8%**. Kilo's batches took gateway 55.5%→87.3% and are filling responses/voice
       (currently WIP). Sub-threshold remaining: gemini (80.8%), anthropic (68.2%) — the adapter/
