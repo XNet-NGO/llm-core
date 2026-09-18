@@ -12,12 +12,15 @@ import com.tddworks.openai.gateway.api.OpenAIProvider
 import com.tddworks.openai.gateway.api.OpenAIProviderConfig
 import com.tddworks.openai.gateway.config.Dialect
 import com.tddworks.openai.gateway.config.ProviderConfig
+import com.tddworks.openai.gateway.config.VideoRequest
+import com.tddworks.openai.gateway.config.VideoTask
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.timeout
 import io.ktor.client.request.forms.MultiPartFormDataContent
 import io.ktor.client.request.forms.formData
 import io.ktor.client.request.header
+import io.ktor.client.request.get
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
@@ -28,6 +31,7 @@ import io.ktor.http.isSuccess
 import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -44,12 +48,18 @@ import kotlinx.serialization.json.jsonPrimitive
  * `{"result":{"image":"<base64>"}}`). Chat/completions are unsupported on this dialect
  * and throw — capability gating is the host's job.
  */
+/** Async video generation on the template dialect (submit + poll). */
+interface VideoGenerationApi {
+    suspend fun submitVideo(request: VideoRequest): VideoTask
+    suspend fun retrieveVideoTask(taskId: String): VideoTask
+}
+
 class TemplateMediaProvider(
     override val id: String,
     override val name: String,
     override val config: OpenAIProviderConfig,
     private val providerConfig: ProviderConfig,
-) : OpenAIProvider {
+) : OpenAIProvider, VideoGenerationApi {
 
     private val json = Json { isLenient = true; ignoreUnknownKeys = true }
 
@@ -183,6 +193,68 @@ class TemplateMediaProvider(
                 created = kotlin.time.Clock.System.now().epochSeconds,
                 data = listOf(Image(url = imageUrl, b64JSON = imageB64)),
             )
+        } finally {
+            client.close()
+        }
+    }
+
+    override suspend fun submitVideo(request: VideoRequest): VideoTask {
+        val base = providerConfig.baseUrl.trimEnd('/')
+        val path = providerConfig.endpoints.videos
+            ?: "/api/v1/services/aigc/video-generation/video-synthesis"
+        val client = HttpClient()
+        try {
+            val response =
+                client.post(base + path) {
+                    timeout { requestTimeoutMillis = providerConfig.timeoutMs }
+                    header("Authorization", "Bearer ${providerConfig.auth.apiKey}")
+                    header("X-DashScope-Async", "enable")
+                    setBody(
+                        TextContent(
+                            json.encodeToString(
+                                buildJsonObject {
+                                    put("model", request.model)
+                                    put("input", buildJsonObject { put("prompt", request.prompt) })
+                                    put(
+                                        "parameters",
+                                        buildJsonObject {
+                                            request.resolution?.let { put("resolution", it) }
+                                            request.ratio?.let { put("ratio", it) }
+                                            request.duration?.let { put("duration", it) }
+                                        },
+                                    )
+                                },
+                            ),
+                            ContentType.Application.Json,
+                        ),
+                    )
+                }
+            if (!response.status.isSuccess()) {
+                throw IllegalStateException("video submit failed: HTTP ${response.status.value} ${response.bodyAsText().take(200)}")
+            }
+            val root = json.parseToJsonElement(response.bodyAsText()).jsonObject
+            return json.decodeFromJsonElement(root["output"] ?: root)
+        } finally {
+            client.close()
+        }
+    }
+
+    override suspend fun retrieveVideoTask(taskId: String): VideoTask {
+        val base = providerConfig.baseUrl.trimEnd('/')
+        val path =
+            (providerConfig.endpoints.tasks ?: "/api/v1/tasks") + "/$taskId"
+        val client = HttpClient()
+        try {
+            val response =
+                client.get(base + path) {
+                    timeout { requestTimeoutMillis = providerConfig.timeoutMs }
+                    header("Authorization", "Bearer ${providerConfig.auth.apiKey}")
+                }
+            if (!response.status.isSuccess()) {
+                throw IllegalStateException("video poll failed: HTTP ${response.status.value}")
+            }
+            val root = json.parseToJsonElement(response.bodyAsText()).jsonObject
+            return json.decodeFromJsonElement(root["output"] ?: root)
         } finally {
             client.close()
         }

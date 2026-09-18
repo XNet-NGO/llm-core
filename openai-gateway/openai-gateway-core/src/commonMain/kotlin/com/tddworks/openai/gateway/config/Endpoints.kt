@@ -21,4 +21,6 @@ data class Endpoints(
     val audioTranscriptions: String? = null,
     val rerank: String? = null,
     val moderation: String? = null,
+    val videos: String? = null,
+    val tasks: String? = null,
 )

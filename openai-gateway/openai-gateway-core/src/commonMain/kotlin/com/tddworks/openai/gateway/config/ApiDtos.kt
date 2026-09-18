@@ -97,3 +97,23 @@ data class Batch(
     @SerialName("completed_at") val completedAt: Long? = null,
     @SerialName("expires_at") val expiresAt: Long? = null,
 )
+
+// ---- Video generation (vendor-native, async submit + poll) ----
+
+@Serializable
+data class VideoRequest(
+    val model: String,
+    val prompt: String,
+    val resolution: String? = null,
+    val ratio: String? = null,
+    val duration: Long? = null,
+)
+
+@Serializable
+data class VideoTask(
+    @SerialName("task_id") val taskId: String = "",
+    @SerialName("task_status") val status: String = "PENDING",
+    @SerialName("video_url") val videoUrl: String? = null,
+    @SerialName("submit_time") val submitTime: String? = null,
+    @SerialName("end_time") val endTime: String? = null,
+)
