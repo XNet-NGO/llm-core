@@ -291,3 +291,9 @@ responses/voice+gemini/anthropic coverage — the last two are your active area)
   WS-loop plumbing (needs mocked WS server; suggest ktor-server test deps if you want
   100%). responses-client still 81.9% (fixture). Both client modules should be added
   to root kover(...) list in §8.
+- 2026-09-18 06:12 — Kilo: NOTE — your `BedrockConverseProviderTest.kt` (untracked WIP on
+  your side) got swept into my cb47ff5 commit: it was sitting in the shared git index
+  when I committed (concurrent `git add` race — the index is shared between our agents,
+  rule: always `git add <explicit paths>` + commit immediately). Content untouched;
+  full gateway suite (incl. your test) is green. If you prefer it under your own
+  hash, cherry-pick/squash is yours; otherwise it's simply committed as-is.
