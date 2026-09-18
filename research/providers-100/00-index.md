@@ -67,6 +67,12 @@ ProviderConfig(
   imageOutput: String = "json",     // "json" (result.image b64) | "raw" (binary body)
   imageModelInPath: Boolean = true, // model id appended to image path
   aliases: Map<String,String> = {}, // gateway slug → upstream model id
+  transforms: Map<String,TemplateTransform> = {}, // D7 per-op: path/method/headers/
+                                                  // requestTemplate ({{key}} placeholders)/
+                                                  // responseMapper{from JSON path, decode
+                                                  // raw|base64|hex|text}; keyed by op
+                                                  // (e.g. "audioSpeech") — live first
+                                                  // consumer: ElevenLabs TTS (2026-09-18)
 )
 ```
 

@@ -7,7 +7,7 @@ mechanical.
 
 ---
 
-## #082 — ElevenLabs 🟡 (auth/model headers VERIFIED 2026-09: elevenlabs.io/docs)
+## #082 — ElevenLabs 🟢 (LIVE-VERIFIED 2026-09-18 via the transforms engine)
 - dialect: TEMPLATE (+ D6 TURN_STREAM WS for stream-input TTS)
 - REST baseUrl: `https://api.elevenlabs.io`; WS: `wss://api.elevenlabs.io`
 - auth: X_API_KEY — `keyHeader: "xi-api-key"` (legacy name; `x-api-key` also accepted)
@@ -24,6 +24,10 @@ mechanical.
   `eleven_multilingual_v2`, `eleven_turbo_v2_5`
 - Quirks: cost/observability via response headers — `character-cost`, `request-id`,
   `x-trace-id` (VERIFIED — log them host-side).
+- LIVE PROOF (2026-09-18, ElevenLabsTtsSmokeITest): POST /v1/text-to-speech/{voice_id}
+  via the transforms engine → 147KB mp3 (eleven_v3 / Sarah, free key). Free-tier gotchas:
+  `voice_settings` stability → 402 paid_plan_required on v3 models (omit); some library
+  voices 402 per-account (smoke test walks candidates).
 ```json
 {"id":"elevenlabs","name":"ElevenLabs","dialect":"TEMPLATE","baseUrl":"https://api.elevenlabs.io",
  "auth":{"scheme":"X_API_KEY","apiKey":"","keyHeader":"xi-api-key"},

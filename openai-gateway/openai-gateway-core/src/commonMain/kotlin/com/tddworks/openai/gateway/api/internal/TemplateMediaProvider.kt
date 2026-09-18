@@ -12,6 +12,9 @@ import com.tddworks.openai.gateway.api.OpenAIProvider
 import com.tddworks.openai.gateway.api.OpenAIProviderConfig
 import com.tddworks.openai.gateway.config.Dialect
 import com.tddworks.openai.gateway.config.ProviderConfig
+import com.tddworks.openai.gateway.config.ResponseMapper
+import com.tddworks.openai.gateway.config.TemplateTransform
+import com.tddworks.openai.gateway.config.applyAuth
 import com.tddworks.openai.gateway.config.VideoRequest
 import com.tddworks.openai.gateway.config.VideoTask
 import io.ktor.client.HttpClient
@@ -20,11 +23,13 @@ import io.ktor.client.plugins.timeout
 import io.ktor.client.request.forms.MultiPartFormDataContent
 import io.ktor.client.request.forms.formData
 import io.ktor.client.request.header
+import io.ktor.client.request.request
 import io.ktor.client.request.get
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.client.statement.readRawBytes
+import io.ktor.http.HttpMethod
 import io.ktor.http.ContentType
 import io.ktor.http.content.TextContent
 import io.ktor.http.isSuccess
@@ -54,13 +59,25 @@ interface VideoGenerationApi {
     suspend fun retrieveVideoTask(taskId: String): VideoTask
 }
 
+/** Text-to-speech on the template dialect, served by the `audioSpeech` transform. */
+data class TtsRequest(
+    val text: String,
+    val model: String? = null,
+    val voice: String? = null,
+    val format: String? = null,
+)
+
+interface TtsApi {
+    suspend fun synthesize(request: TtsRequest): ByteArray
+}
+
 class TemplateMediaProvider(
     override val id: String,
     override val name: String,
     override val config: OpenAIProviderConfig,
     private val providerConfig: ProviderConfig,
     private val client: HttpClient? = null,
-) : OpenAIProvider, VideoGenerationApi {
+) : OpenAIProvider, VideoGenerationApi, TtsApi {
 
     private val json = Json { isLenient = true; ignoreUnknownKeys = true }
 
@@ -262,6 +279,71 @@ class TemplateMediaProvider(
             if (client == null) http.close()
         }
     }
+
+    override suspend fun synthesize(request: TtsRequest): ByteArray {
+        val transform =
+            providerConfig.transforms["audioSpeech"]
+                ?: throw UnsupportedOperationException(
+                    "dialect ${providerConfig.dialect} has no audioSpeech transform configured",
+                )
+        val params = ttsParams(request)
+        val targetPath = renderTemplate(transform.path ?: "/tts", params)
+        val http = http()
+        try {
+            val response =
+                http.request(providerConfig.baseUrl.trimEnd('/') + targetPath) {
+                    method = HttpMethod.parse(transform.method)
+                    timeout { requestTimeoutMillis = providerConfig.timeoutMs }
+                    applyAuth(providerConfig)
+                    transform.headers.forEach { (k, v) -> header(k, renderTemplate(v, params)) }
+                    transform.requestTemplate?.let { template ->
+                        val rendered = renderTemplateJson(template, params)
+                        setBody(
+                            TextContent(
+                                json.encodeToString(rendered),
+                                ContentType.Application.Json,
+                            ),
+                        )
+                    }
+                }
+            if (!response.status.isSuccess()) {
+                throw IllegalStateException(
+                    "tts failed: HTTP ${response.status.value} ${response.bodyAsText().take(200)}",
+                )
+            }
+            return decodeResponseMapper(transform.responseMapper, response)
+        } finally {
+            if (client == null) http.close()
+        }
+    }
+
+    private fun ttsParams(request: TtsRequest): Map<String, String> =
+        mapOf(
+            "text" to request.text,
+            "model" to (request.model ?: providerConfig.aliases.values.firstOrNull() ?: ""),
+            "voice_id" to (request.voice ?: ""),
+            "voice" to (request.voice ?: ""),
+            "format" to (request.format ?: ""),
+        )
+
+    private suspend fun decodeResponseMapper(
+        mapper: ResponseMapper?,
+        response: io.ktor.client.statement.HttpResponse,
+    ): ByteArray {
+        val decode = mapper?.decode?.lowercase() ?: "raw"
+        if (decode == "raw") return response.readRawBytes()
+        val root = json.parseToJsonElement(response.bodyAsText())
+        val resolved = resolveJsonPath(root, mapper?.from ?: "$")
+            ?: throw IllegalStateException("response mapper path not found: ${mapper?.from}")
+        val value = (resolved as? kotlinx.serialization.json.JsonPrimitive)?.content
+            ?: throw IllegalStateException("response mapper path is not a string: ${mapper?.from}")
+        return when (decode) {
+            "base64" -> decodeBase64(value)
+            "hex" -> hexToBytes(value)
+            "text" -> value.encodeToByteArray()
+            else -> throw IllegalStateException("unsupported response mapper decode: $decode")
+        }
+    }
 }
 
 fun mediaProvider(config: ProviderConfig): OpenAIProvider =
@@ -271,3 +353,64 @@ fun mediaProvider(config: ProviderConfig): OpenAIProvider =
         config = legacyConfig(config),
         providerConfig = config,
     )
+
+
+// ---- template rendering + response mapping (top-level, unit-tested) ----
+
+internal fun renderTemplate(template: String, params: Map<String, String>): String {
+    var out = template
+    params.forEach { (k, v) -> out = out.replace("{{$k}}", v) }
+    return out
+}
+
+internal fun renderTemplateJson(template: kotlinx.serialization.json.JsonElement, params: Map<String, String>): kotlinx.serialization.json.JsonElement =
+    when (template) {
+        is kotlinx.serialization.json.JsonPrimitive -> {
+            val raw = template.content
+            if (raw.contains("{{")) {
+                kotlinx.serialization.json.JsonPrimitive(renderTemplate(raw, params))
+            } else {
+                template
+            }
+        }
+        is kotlinx.serialization.json.JsonObject ->
+            kotlinx.serialization.json.buildJsonObject {
+                template.forEach { (k, v) -> put(k, renderTemplateJson(v, params)) }
+            }
+        is kotlinx.serialization.json.JsonArray ->
+            kotlinx.serialization.json.buildJsonArray {
+                template.forEach { add(renderTemplateJson(it, params)) }
+            }
+        else -> template
+    }
+
+internal fun resolveJsonPath(root: kotlinx.serialization.json.JsonElement, path: String): kotlinx.serialization.json.JsonElement? {
+    if (path == "$") return root
+    var current: kotlinx.serialization.json.JsonElement? = root
+    path.removePrefix("$").trimStart('.').split('.').forEach { segment ->
+        if (current == null) return null
+        val key = segment.substringBefore("[").removeSuffix("]")
+        val index = Regex("""\[(\d+)]""").find(segment)?.groupValues?.get(1)?.toIntOrNull()
+        current =
+            when (val el = current) {
+                is kotlinx.serialization.json.JsonObject -> el[key]
+                is kotlinx.serialization.json.JsonArray -> key.toIntOrNull()?.let { el.getOrNull(it) }
+                else -> null
+            }
+        if (current != null && index != null) {
+            current = (current as? kotlinx.serialization.json.JsonArray)?.getOrNull(index)
+        }
+    }
+    return current
+}
+
+@OptIn(kotlin.io.encoding.ExperimentalEncodingApi::class)
+internal fun decodeBase64(value: String): ByteArray = kotlin.io.encoding.Base64.decode(value)
+
+internal fun hexToBytes(value: String): ByteArray {
+    val clean = value.trim()
+    require(clean.length % 2 == 0) { "hex string must have even length" }
+    return ByteArray(clean.length / 2) { i ->
+        clean.substring(i * 2, i * 2 + 2).toInt(16).toByte()
+    }
+}

@@ -365,4 +365,16 @@ BUILD SUCCESSFUL for every module** (arm64-v8a covered). JVM + macOS ARM64 + ful
 green; nothing in your test suites changed. `kotlincrypto` (SigV4 dep) supports Android.
 Namespaces used: openai.client / anthropic.client / ollama.client / gemini.client /
 responses.client / voice.client / openai.gateway / common. If you'd prefer different namespaces or
-a shared android convention plugin, say so. Committed via paths-only (`git commit -- <paths>`).
+a shared android convention plugin, say so. Committed via paths-only (`git commit -- <paths>`).- 2026-09-18 07:30 — Kilo: **D7 `transforms` field LANDED + first live consumer wired.**
+  Schema (see 00-index §0, same commit): ProviderConfig.transforms:
+  Map<String, TemplateTransform{path, method, headers, requestTemplate(JsonElement,
+  {{key}} placeholders), responseMapper{from: JSON path, decode: raw|base64|hex|text}}>.
+  TemplateMediaProvider now implements TtsApi.synthesize() driven by the
+  "audioSpeech" transform; auth flows through applyAuth (per-scheme, no hardcoded
+  bearer). ElevenLabs config block updated in 05-media-voice #082 and **LIVE-VERIFIED
+  with a real key**: 147KB mp3 (eleven_v3, Sarah voice). Free-tier gotchas captured:
+  voice_settings stability → 402 paid_plan_required on v3; some library voices 402 per
+  account (smoke test walks candidates). Unit suite: TemplateTransformsTest (14) —
+  renderers, JSON-path resolver (object+array), hex/base64/text mappers, auth schemes,
+  error paths. If you want STT or the other TTS vendors next, they're just config now
+  (per-op transforms); kiro: safe to sync COMPLETION_SPEC §5.3 with this shape.

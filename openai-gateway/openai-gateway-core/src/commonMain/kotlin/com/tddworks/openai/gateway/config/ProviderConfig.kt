@@ -40,6 +40,11 @@ data class ProviderConfig(
      * provider before dispatching the request. Empty map (default) is a pass-through no-op.
      */
     val aliases: Map<String, String> = emptyMap(),
+    /**
+     * Per-op template transformations (D7). Keyed by operation name (e.g. `audioSpeech`
+     * for TTS on the template engine). See [TemplateTransform].
+     */
+    val transforms: Map<String, TemplateTransform> = emptyMap(),
 ) {
     companion object {
         fun fromJson(json: String): ProviderConfig = JsonLenientConfig.decodeFromString(json)
