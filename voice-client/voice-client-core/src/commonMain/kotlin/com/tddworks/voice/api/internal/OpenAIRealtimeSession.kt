@@ -12,6 +12,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -52,6 +53,11 @@ internal class OpenAIRealtimeSession(private val config: VoiceConfig) : VoiceSes
             client.webSocket(urlString = wsUrl(), request = {}) {
                 val sessionScope = this
                 outbound = sessionScope.outgoing
+                launch {
+                    for (payload in pendingSends) {
+                        sessionScope.outgoing.send(Frame.Text(payload))
+                    }
+                }
                 eventsFlow.tryEmit(VoiceEvent.SessionReady(config.model()))
                 for (frame in sessionScope.incoming) {
                     if (frame !is Frame.Text) continue
@@ -74,8 +80,10 @@ internal class OpenAIRealtimeSession(private val config: VoiceConfig) : VoiceSes
         return "$base/v1/realtime?model=${config.model()}$keySuffix"
     }
 
+    private val pendingSends = Channel<String>(Channel.UNLIMITED)
+
     private fun send(message: JsonObject) {
-        scope.launch { outbound?.send(Frame.Text(json.encodeToString(message))) }
+        pendingSends.trySend(json.encodeToString(message))
     }
 
     @OptIn(ExperimentalEncodingApi::class)

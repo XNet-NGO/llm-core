@@ -12,6 +12,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -19,7 +20,9 @@ import kotlinx.coroutines.launch
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -27,13 +30,12 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonPrimitive
 
 /**
  * Gemini Live (D6, canonical shape two): BidiGenerateContent over WebSocket.
  * Audio travels as base64 `mediaChunks` inside JSON frames; tool calls arrive as
- * `functionCall` parts / `toolCall` messages.
+ * `functionCall` parts / `toolCall` messages. Session readiness is signaled by the
+ * server's `setupComplete` frame.
  */
 internal class GeminiLiveSession(private val config: VoiceConfig) : VoiceSession {
 
@@ -41,7 +43,6 @@ internal class GeminiLiveSession(private val config: VoiceConfig) : VoiceSession
     private val eventsFlow = MutableSharedFlow<VoiceEvent>(extraBufferCapacity = 128)
     private val json = Json { ignoreUnknownKeys = true }
     private var outbound: SendChannel<Frame>? = null
-    private var callCounter = 0L
 
     override val events: Flow<VoiceEvent> = eventsFlow
 
@@ -55,11 +56,24 @@ internal class GeminiLiveSession(private val config: VoiceConfig) : VoiceSession
             client.webSocket(urlString = wsUrl(), request = {}) {
                 val session = this
                 outbound = session.outgoing
-                eventsFlow.tryEmit(sendSetup())
+                if (System.getenv("LLMCORE_DEBUG") == "1") println("GEMINI-LIVE WS OPENED url=${wsUrl()}")
+                session.outgoing.send(Frame.Text(json.encodeToString(setupMessage())))
+                if (System.getenv("LLMCORE_DEBUG") == "1") println("GEMINI-LIVE SETUP SENT")
+                launch {
+                    for (payload in pendingSends) {
+                        session.outgoing.send(Frame.Text(payload))
+                    }
+                }
                 for (frame in session.incoming) {
-                    if (frame !is Frame.Text) continue
-                    val event = parseEvent(frame.readText()) ?: continue
-                    eventsFlow.tryEmit(event)
+                    val text: String? =
+                        when (frame) {
+                            is Frame.Text -> frame.readText()
+                            is Frame.Binary -> frame.data.decodeToString()
+                            else -> null
+                        }
+                    if (text == null) continue
+                    if (System.getenv("LLMCORE_DEBUG") == "1") println("GEMINI-LIVE RAW: $text")
+                    parseEvents(text).forEach { eventsFlow.tryEmit(it) }
                 }
             }
         } catch (e: Throwable) {
@@ -70,16 +84,23 @@ internal class GeminiLiveSession(private val config: VoiceConfig) : VoiceSession
         }
     }
 
+    /**
+     * Gemini Live binds at the GenerativeService WebSocket connector:
+     * `wss://<host>/ws/google.ai.generativelanguage.v1beta/GenerativeService.BidiGenerateContent`.
+     * `VoiceConfig.baseUrl` is the ws connector prefix; the model travels in the
+     * setup message.
+     */
     private fun wsUrl(): String {
         val base = config.baseUrl().trimEnd('/')
         val keySuffix =
             if (config.apiKey().isNotEmpty()) "?key=${config.apiKey()}" else ""
-        return "$base/v1beta/models/${config.model()}:bidiGenerateContent$keySuffix"
+        val connector =
+            "/ws/google.ai.generativelanguage.${config.apiVersion}.GenerativeService.BidiGenerateContent"
+        return "$base$connector$keySuffix"
     }
 
-    private suspend fun sendSetup(): VoiceEvent {
-        val message =
-            buildJsonObject {
+    private fun setupMessage(): JsonObject =
+        buildJsonObject {
                 put(
                     "setup",
                     buildJsonObject {
@@ -118,14 +139,16 @@ internal class GeminiLiveSession(private val config: VoiceConfig) : VoiceSession
                             )
                         }
                     },
-                )
-            }
-        outbound?.send(Frame.Text(json.encodeToString(message)))
-        return VoiceEvent.SessionReady(config.model())
-    }
+            )
+        }
+        
+
+    private val pendingSends = Channel<String>(Channel.UNLIMITED)
 
     private fun send(message: JsonObject) {
-        scope.launch { outbound?.send(Frame.Text(json.encodeToString(message))) }
+        val payload = json.encodeToString(message)
+        if (System.getenv("LLMCORE_DEBUG") == "1") println("GEMINI-LIVE OUT: $payload")
+        pendingSends.trySend(payload)
     }
 
     @OptIn(ExperimentalEncodingApi::class)
@@ -168,6 +191,7 @@ internal class GeminiLiveSession(private val config: VoiceConfig) : VoiceSession
                                             "parts",
                                             buildJsonArray { add(buildJsonObject { put("text", text) }) },
                                         )
+                                        put("role", "user")
                                     },
                                 )
                             },
@@ -225,74 +249,82 @@ internal class GeminiLiveSession(private val config: VoiceConfig) : VoiceSession
         )
     }
 
-    private fun nextCallId(): String = (++callCounter).toString()
-
     override suspend fun close() {
         scope.coroutineContext[Job]?.cancel()
         eventsFlow.tryEmit(VoiceEvent.Closed())
     }
 
-    private fun parseEvent(text: String): VoiceEvent? {
+    private var callCounter = 0L
+
+    private fun nextCallId(): String = (++callCounter).toString()
+
+    private fun parseEvents(text: String): List<VoiceEvent> {
         val root =
             try {
                 json.parseToJsonElement(text).jsonObject
             } catch (e: Throwable) {
-                return null
+                return emptyList()
             }
         return when {
-            root.containsKey("setupComplete") -> VoiceEvent.SessionReady(config.model())
+            root.containsKey("setupComplete") ->
+                listOf(VoiceEvent.SessionReady(config.model()))
             root.containsKey("serverContent") -> parseServerContent(root["serverContent"]!!.jsonObject)
             root.containsKey("toolCall") -> parseToolCall(root["toolCall"]!!.jsonObject)
-            root.containsKey("interrupted") -> VoiceEvent.Interrupted()
+            root.containsKey("interrupted") -> listOf(VoiceEvent.Interrupted())
             root.containsKey("audioTranscription") ->
                 root["audioTranscription"]!!.jsonObject["text"]?.jsonPrimitive?.contentOrNull
-                    ?.let { VoiceEvent.InputTranscription(it) }
+                    ?.let { listOf(VoiceEvent.InputTranscription(it)) }
+                    ?: emptyList()
             root.containsKey("error") ->
-                VoiceEvent.Error(
-                    message =
-                        root["error"]?.jsonObject?.get("message")?.jsonPrimitive?.contentOrNull
-                            ?: "gemini live error",
+                listOf(
+                    VoiceEvent.Error(
+                        message =
+                            root["error"]?.jsonObject?.get("message")?.jsonPrimitive?.contentOrNull
+                                ?: "gemini live error",
+                    ),
                 )
-            else -> null
+            else -> emptyList()
         }
     }
 
-    private fun parseServerContent(content: JsonObject): VoiceEvent? {
-        var event: VoiceEvent? = null
+    private fun parseServerContent(content: JsonObject): List<VoiceEvent> {
+        val events = mutableListOf<VoiceEvent>()
         content["modelTurn"]?.jsonObject?.get("parts")?.jsonArray?.forEach { partEl ->
             val part = partEl.jsonObject
             part["inlineData"]?.jsonObject?.let { data ->
-                data["data"]?.jsonPrimitive?.contentOrNull?.let { event = VoiceEvent.AudioDelta(it) }
+                data["data"]?.jsonPrimitive?.contentOrNull?.let { events.add(VoiceEvent.AudioDelta(it)) }
             }
             part["text"]?.jsonPrimitive?.contentOrNull?.let {
-                event = VoiceEvent.OutputTranscription(it)
+                events.add(VoiceEvent.OutputTranscription(it))
             }
             part["functionCall"]?.jsonObject?.let { fc ->
-                event =
+                events.add(
                     VoiceEvent.ToolCall(
                         name = fc["name"]?.jsonPrimitive?.contentOrNull ?: "",
                         arguments = fc["args"]?.toString() ?: "{}",
                         callId = fc["id"]?.jsonPrimitive?.contentOrNull,
-                    )
+                    ),
+                )
             }
         }
-        if (content["turnComplete"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull() == true &&
-            event == null
-        ) {
-            event = VoiceEvent.TurnComplete()
-        }
-        return event
+        val complete =
+            ((content["turnComplete"] ?: content["generationComplete"])
+                ?.jsonPrimitive?.contentOrNull
+                ?: "false").toBooleanStrictOrNull() == true
+        if (complete) events.add(VoiceEvent.TurnComplete())
+        return events
     }
 
-    private fun parseToolCall(call: JsonObject): VoiceEvent? {
-        call["functionCalls"]?.jsonArray?.firstOrNull()?.let { fcEl ->
-            val fc = fcEl.jsonObject
-            return VoiceEvent.ToolCall(
+    private fun parseToolCall(call: JsonObject): List<VoiceEvent> {
+        val fc = call["functionCalls"]?.jsonArray?.firstOrNull()?.jsonObject ?: return emptyList()
+        return listOf(
+            VoiceEvent.ToolCall(
                 name = fc["name"]?.jsonPrimitive?.contentOrNull ?: "",
                 arguments = fc["args"]?.toString() ?: "{}",
-                callId = fc["id"]?.jsonPrimitive?.contentOrNull ?: call["id"]?.jsonPrimitive?.contentOrNull,
-            )
-        }
-        return null
+                callId =
+                    fc["id"]?.jsonPrimitive?.contentOrNull
+                        ?: call["id"]?.jsonPrimitive?.contentOrNull,
+            ),
+        )
     }
 }

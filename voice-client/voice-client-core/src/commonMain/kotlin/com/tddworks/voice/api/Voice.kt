@@ -25,6 +25,7 @@ object Voice {
         model: String,
         systemInstruction: String? = null,
         voice: String? = null,
+        apiVersion: String = "v1beta",
     ) =
         VoiceConfig(
             vendor = vendor,
@@ -33,5 +34,6 @@ object Voice {
             model = { model },
             systemInstruction = systemInstruction,
             voice = voice,
+            apiVersion = apiVersion,
         )
 }

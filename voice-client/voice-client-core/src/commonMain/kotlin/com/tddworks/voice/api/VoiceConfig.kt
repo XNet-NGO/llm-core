@@ -22,4 +22,7 @@ data class VoiceConfig(
     val voice: String? = null,
     val audioFormat: String = "pcm16",
     val sampleRate: Int = 24000,
+
+    /** API version segment in the connector path (e.g. v1beta, v1alpha). */
+    val apiVersion: String = "v1beta",
 )
