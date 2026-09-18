@@ -69,10 +69,15 @@ ProviderConfig(
   aliases: Map<String,String> = {}, // gateway slug → upstream model id
   transforms: Map<String,TemplateTransform> = {}, // D7 per-op: path/method/headers/
                                                   // requestTemplate ({{key}} placeholders)/
+                                                  // rawTemplate+contentType (SSML/XML)/
+                                                  // bodyFormat json|raw|multipart (+multipartField)/
                                                   // responseMapper{from JSON path, decode
-                                                  // raw|base64|hex|text}; keyed by op
-                                                  // (e.g. "audioSpeech") — live first
-                                                  // consumer: ElevenLabs TTS (2026-09-18)
+                                                  // raw|base64|hex|text|url, jobId path};
+                                                  // "<op>.poll" transform + jobId => async
+                                                  // submit/poll job (AssemblyAI/BFL/Runway).
+                                                  // Ops: audioSpeech, stt, imagesGenerations,
+                                                  // videoSubmit, videoPoll. First live consumer:
+                                                  // ElevenLabs TTS (2026-09-18)
 )
 ```
 

@@ -30,6 +30,7 @@ import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.client.statement.readRawBytes
 import io.ktor.http.HttpMethod
+import io.ktor.http.HttpHeaders
 import io.ktor.http.ContentType
 import io.ktor.http.content.TextContent
 import io.ktor.http.isSuccess
@@ -71,13 +72,25 @@ interface TtsApi {
     suspend fun synthesize(request: TtsRequest): ByteArray
 }
 
+/** Speech-to-text on the template dialect, served by the `stt` transform (json/raw/multipart, sync or async with `stt.poll`). */
+data class SttRequest(
+    val audio: ByteArray,
+    val mime: String = "audio/wav",
+    val model: String? = null,
+    val language: String? = null,
+)
+
+interface SttApi {
+    suspend fun transcribe(request: SttRequest): String
+}
+
 class TemplateMediaProvider(
     override val id: String,
     override val name: String,
     override val config: OpenAIProviderConfig,
     private val providerConfig: ProviderConfig,
     private val client: HttpClient? = null,
-) : OpenAIProvider, VideoGenerationApi, TtsApi {
+) : OpenAIProvider, VideoGenerationApi, TtsApi, SttApi {
 
     private val json = Json { isLenient = true; ignoreUnknownKeys = true }
 
@@ -134,6 +147,9 @@ class TemplateMediaProvider(
      */
     @OptIn(ExperimentalTime::class)
     override suspend fun generate(request: ImageCreate): ListResponse<Image> {
+        if (providerConfig.transforms.containsKey("imagesGenerations.poll")) {
+            return generateAsync(request)
+        }
         val base = providerConfig.baseUrl.trimEnd('/')
         val runPath = providerConfig.endpoints.imagesGenerations ?: "/ai/run"
         val model = request.model.value.removePrefix("models/")
@@ -219,6 +235,10 @@ class TemplateMediaProvider(
     }
 
     override suspend fun submitVideo(request: VideoRequest): VideoTask {
+        val transformed = providerConfig.transforms["videoSubmit"]
+        if (transformed != null) {
+            return submitVideoTransformed(request, transformed)
+        }
         val base = providerConfig.baseUrl.trimEnd('/')
         val path = providerConfig.endpoints.videos
             ?: "/api/v1/services/aigc/video-generation/video-synthesis"
@@ -259,7 +279,58 @@ class TemplateMediaProvider(
         }
     }
 
+    private fun videoParams(request: VideoRequest): Map<String, String> =
+        mapOf(
+            "model" to (request.model.ifEmpty { providerConfig.aliases.values.firstOrNull() ?: "" }),
+            "prompt" to (request.prompt ?: ""),
+            "ratio" to (request.ratio ?: ""),
+            "resolution" to (request.resolution ?: ""),
+            "duration" to (request.duration?.toString() ?: ""),
+        )
+
+    private val pendingVideoParams = mutableMapOf<String, Map<String, String>>()
+
+    private suspend fun submitVideoTransformed(request: VideoRequest, submit: TemplateTransform): VideoTask {
+        val params = HashMap(videoParams(request))
+        val submitResponse = sendTransform(submit, params)
+        val root = json.parseToJsonElement(submitResponse.bodyAsText())
+        val mapper = submit.responseMapper
+        val id =
+            resolveJsonPath(root, mapper?.jobId ?: "$.task_id")?.jsonPrimitive?.contentOrNull
+                ?: resolveJsonPath(root, "$.id")?.jsonPrimitive?.contentOrNull
+                ?: throw IllegalStateException("videoSubmit: task id not found")
+        val status =
+            resolveJsonPath(root, "$.task_status")?.jsonPrimitive?.contentOrNull
+                ?: resolveJsonPath(root, "$.status")?.jsonPrimitive?.contentOrNull
+                ?: "PENDING"
+        pendingVideoParams[id] = params
+        return VideoTask(taskId = id, status = status.uppercase())
+    }
+
     override suspend fun retrieveVideoTask(taskId: String): VideoTask {
+        val pollTransform = providerConfig.transforms["videoPoll"]
+        if (pollTransform != null) {
+            val params = HashMap(pendingVideoParams[taskId] ?: emptyMap()).apply { put("job_id", taskId) }
+            val body = sendTransform(pollTransform, params).bodyAsText()
+            if (body.contains("failed") || body.contains("\"error\"")) {
+                throw IllegalStateException("video task $taskId failed: ${body.take(200)}")
+            }
+            val root = runCatching { json.parseToJsonElement(body) }.getOrNull()?.jsonObject
+            val url =
+                root?.let { r ->
+                    resolveJsonPath(r, pollTransform.responseMapper?.from ?: "$.video_url")?.jsonPrimitive?.contentOrNull
+                }
+            val status =
+                root?.let { r ->
+                    resolveJsonPath(r, "$.task_status")?.jsonPrimitive?.contentOrNull
+                        ?: resolveJsonPath(r, "$.status")?.jsonPrimitive?.contentOrNull
+                        ?: resolveJsonPath(r, "$.state")?.jsonPrimitive?.contentOrNull
+                } ?: "PENDING"
+            if (url == null && status == "PENDING") {
+                throw IllegalStateException("video task $taskId still pending")
+            }
+            return VideoTask(taskId = taskId, status = status.uppercase(), videoUrl = url)
+        }
         val base = providerConfig.baseUrl.trimEnd('/')
         val path =
             (providerConfig.endpoints.tasks ?: "/api/v1/tasks") + "/$taskId"
@@ -280,42 +351,199 @@ class TemplateMediaProvider(
         }
     }
 
+    @OptIn(kotlin.io.encoding.ExperimentalEncodingApi::class, kotlin.time.ExperimentalTime::class)
+    private suspend fun generateAsync(request: ImageCreate): ListResponse<Image> {
+        val submit = providerConfig.transforms["imagesGenerations"]
+            ?: throw IllegalStateException("async image generation needs an imagesGenerations transform")
+        val params =
+            mutableMapOf(
+                "prompt" to request.prompt,
+                "model" to (request.model.value.ifEmpty { providerConfig.aliases.values.firstOrNull() ?: "" }),
+            )
+        request.size?.value?.let { params["size"] = it }
+        val image =
+            runTransform("imagesGenerations", submit, params) { bytes, url ->
+                if (url != null) {
+                    Image(url = url)
+                } else {
+                    Image(b64JSON = kotlin.io.encoding.Base64.encode(bytes))
+                }
+            }
+        return ListResponse(created = kotlin.time.Clock.System.now().epochSeconds, data = listOf(image))
+    }
+
     override suspend fun synthesize(request: TtsRequest): ByteArray {
         val transform =
             providerConfig.transforms["audioSpeech"]
                 ?: throw UnsupportedOperationException(
                     "dialect ${providerConfig.dialect} has no audioSpeech transform configured",
                 )
-        val params = ttsParams(request)
-        val targetPath = renderTemplate(transform.path ?: "/tts", params)
+        val params = mutableMapOf(
+            "text" to request.text,
+            "model" to (request.model ?: providerConfig.aliases.values.firstOrNull() ?: ""),
+            "voice_id" to (request.voice ?: ""),
+            "voice" to (request.voice ?: ""),
+            "format" to (request.format ?: ""),
+        )
+        return runTransform("audioSpeech", transform, params) { bytes, url ->
+            url?.let { throw IllegalStateException("decode=url is not supported for tts") }
+            bytes
+        }
+    }
+
+    override suspend fun transcribe(request: SttRequest): String {
+        val transform =
+            providerConfig.transforms["stt"]
+                ?: throw UnsupportedOperationException(
+                    "dialect ${providerConfig.dialect} has no stt transform configured",
+                )
+        @OptIn(kotlin.io.encoding.ExperimentalEncodingApi::class)
+        fun b64(data: ByteArray): String = kotlin.io.encoding.Base64.encode(data)
+        val params = mutableMapOf(
+            "data" to b64(request.audio),
+            "mime" to request.mime,
+            "model" to (request.model ?: providerConfig.aliases.values.firstOrNull() ?: ""),
+            "language" to (request.language ?: ""),
+            "format" to "audio",
+        )
+        return runTransform("stt", transform, params, audioBody = request.audio, audioMime = request.mime) { bytes, url ->
+            url?.let { throw IllegalStateException("decode=url is not supported for stt") }
+            bytes.decodeToString()
+        }
+    }
+
+    /**
+     * Runs a transform, optionally as a submit/poll job when
+     * transforms["<key>.poll"] exists and the submit mapper declares a jobId path.
+     */
+    private suspend fun <T> runTransform(
+        key: String,
+        transform: TemplateTransform,
+        params: MutableMap<String, String>,
+        audioBody: ByteArray? = null,
+        audioMime: String = "audio/wav",
+        result: suspend (ByteArray, String?) -> T,
+    ): T {
+        val poll = providerConfig.transforms["$key.poll"]
+        val submitResponse = sendTransform(transform, params, audioBody, audioMime)
+        val mapper = transform.responseMapper
+        if (poll == null || mapper?.jobId == null) {
+            val syncResult = decodeMapped(mapper, submitResponse.readRawBytes())
+                ?: throw IllegalStateException("sync $key: response mapper found nothing at ${mapper?.from ?: "$"}")
+            return result(syncResult, null)
+        }
+        val root = json.parseToJsonElement(submitResponse.readRawBytes().decodeToString())
+        val id =
+            resolveJsonPath(root, mapper.jobId)?.jsonPrimitive?.contentOrNull
+                ?: throw IllegalStateException("async $key: job id not found at ${mapper.jobId}")
+        val pollParams = HashMap(params).apply { put("job_id", id) }
+        val deadline = System.currentTimeMillis() + providerConfig.timeoutMs
+        while (true) {
+            val pollBytes = sendTransform(poll, pollParams, audioBody, audioMime).readRawBytes()
+            val body = pollBytes.decodeToString()
+            if (body.contains("\"failed\"") || body.contains("\"error\"")) {
+                throw IllegalStateException("async $key job $id failed: ${body.take(200)}")
+            }
+            val decoded: ByteArray? = decodeMapped(poll.responseMapper ?: mapper, pollBytes)
+            if (decoded != null) {
+                val pollMapper = poll.responseMapper ?: mapper
+                val decodedUrl = if (pollMapper.decode == "url") bodyUrlOrNull(body, pollMapper.from) else null
+                return result(decoded, decodedUrl)
+            }
+            if (System.currentTimeMillis() > deadline) {
+                throw IllegalStateException("async $key job $id timed out after ${providerConfig.timeoutMs}ms")
+            }
+            kotlinx.coroutines.delay(2_000)
+        }
+    }
+
+    private fun bodyUrlOrNull(body: String, from: String): String? =
+        runCatching {
+            val el = resolveJsonPath(json.parseToJsonElement(body), from)
+            el?.jsonPrimitive?.contentOrNull
+        }.getOrNull()
+
+    /** Sends a transform request honoring auth scheme, headers, and body format. */
+    private suspend fun sendTransform(
+        transform: TemplateTransform,
+        params: MutableMap<String, String>,
+        audioBody: ByteArray? = null,
+        audioMime: String = "audio/wav",
+    ): io.ktor.client.statement.HttpResponse {
         val http = http()
-        try {
+        return try {
             val response =
-                http.request(providerConfig.baseUrl.trimEnd('/') + targetPath) {
+                http.request(providerConfig.baseUrl.trimEnd('/') + renderTemplate(transform.path ?: "/", params)) {
                     method = HttpMethod.parse(transform.method)
                     timeout { requestTimeoutMillis = providerConfig.timeoutMs }
                     applyAuth(providerConfig)
                     transform.headers.forEach { (k, v) -> header(k, renderTemplate(v, params)) }
-                    transform.requestTemplate?.let { template ->
-                        val rendered = renderTemplateJson(template, params)
-                        setBody(
-                            TextContent(
-                                json.encodeToString(rendered),
-                                ContentType.Application.Json,
-                            ),
-                        )
+                    when (transform.bodyFormat.lowercase()) {
+                        "raw" -> {
+                            val raw = renderTemplate(transform.rawTemplate ?: "", params)
+                            if (raw.isNotEmpty()) {
+                                setBody(TextContent(raw, ContentType.parse(transform.contentType)))
+                            } else if (audioBody != null) {
+                                setBody(audioBody)
+                                header(HttpHeaders.ContentType, audioMime.ifEmpty { "application/octet-stream" })
+                            }
+                        }
+                        "multipart" -> {
+                            setBody(
+                                MultiPartFormDataContent(
+                                    formData {
+                                        append("model_id", params["model"] ?: "")
+                                        if (params["language"].isNullOrEmpty().not()) {
+                                            append("language_code", params["language"]!!)
+                                        }
+                                        append(
+                                            transform.multipartField,
+                                            audioBody ?: ByteArray(0),
+                                            io.ktor.http.Headers.build {
+                                                append(HttpHeaders.ContentType, audioMime)
+                                                append(HttpHeaders.ContentDisposition, "filename=\"audio\"")
+                                            },
+                                        )
+                                    },
+                                ),
+                            )
+                        }
+                        else -> {
+                            transform.requestTemplate?.let { template ->
+                                val rendered = renderTemplateJson(template, params)
+                                setBody(TextContent(json.encodeToString(rendered), ContentType.Application.Json))
+                            }
+                        }
                     }
                 }
             if (!response.status.isSuccess()) {
                 throw IllegalStateException(
-                    "tts failed: HTTP ${response.status.value} ${response.bodyAsText().take(200)}",
+                    "transform ${transform.path} failed: HTTP ${response.status.value} ${response.bodyAsText().take(200)}",
                 )
             }
-            return decodeResponseMapper(transform.responseMapper, response)
+            response
         } finally {
             if (client == null) http.close()
         }
     }
+
+    /** Decodes raw response bytes via the mapper; null when the mapped path is absent (poll retry). */
+    private fun decodeMapped(mapper: ResponseMapper?, bytes: ByteArray): ByteArray? {
+        val decode = mapper?.decode?.lowercase() ?: "raw"
+        if (decode == "raw") return bytes
+        val body = bytes.decodeToString()
+        val root = runCatching { json.parseToJsonElement(body) }.getOrNull() ?: return null
+        val resolved = resolveJsonPath(root, mapper?.from ?: "$") ?: return null
+        val value = (resolved as? kotlinx.serialization.json.JsonPrimitive)?.content ?: return null
+        return when (decode) {
+            "base64" -> decodeBase64(value)
+            "hex" -> hexToBytes(value)
+            "text" -> value.encodeToByteArray()
+            "url" -> value.encodeToByteArray()
+            else -> throw IllegalStateException("unsupported response mapper decode: $decode")
+        }
+    }
+
 
     private fun ttsParams(request: TtsRequest): Map<String, String> =
         mapOf(

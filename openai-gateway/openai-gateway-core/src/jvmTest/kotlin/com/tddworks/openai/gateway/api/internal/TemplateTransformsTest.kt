@@ -8,10 +8,12 @@ import com.tddworks.openai.gateway.config.TemplateTransform
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.MockRequestHandleScope
+import com.tddworks.openai.api.images.api.ImageCreate
 import io.ktor.client.engine.mock.respond
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
+import com.tddworks.openai.gateway.config.VideoRequest
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
@@ -309,5 +311,347 @@ class TemplateTransformsTest {
             )
         p.synthesize(TtsRequest(text = "x", model = null))
         assertTrue(body!!.contains("\"model\":\"eleven_v3\""))
+    }
+}
+/**
+ * New engine capabilities: async submit/poll jobs (AssemblyAI/BFL/Runway style),
+ * raw SSML bodies (Azure Speech), raw-audio STT (Deepgram), multipart STT
+ * (ElevenLabs), transform-driven video + async images.
+ */
+class TemplateTransformsAsyncTest {
+
+    private val json = Json { ignoreUnknownKeys = true }
+
+    private fun provider(
+        transforms: Map<String, com.tddworks.openai.gateway.config.TemplateTransform>,
+        timeoutMs: Long = 5_000,
+        handler: suspend MockRequestHandleScope.(io.ktor.client.request.HttpRequestData) -> io.ktor.client.request.HttpResponseData,
+    ): TemplateMediaProvider {
+        val config =
+            com.tddworks.openai.gateway.config.ProviderConfig(
+                id = "p",
+                baseUrl = "https://svc.test",
+                dialect = com.tddworks.openai.gateway.config.Dialect.TEMPLATE,
+                timeoutMs = timeoutMs,
+                transforms = transforms,
+            )
+        return TemplateMediaProvider(
+            id = config.id, name = config.id, config = legacyConfig(config),
+            providerConfig = config,
+            client = HttpClient(MockEngine(handler)),
+        )
+    }
+
+    // ---- async submit/poll ----
+
+    @Test
+    fun `async stt submits then polls to transcript`() = runTest {
+        var calls = 0
+        val p =
+            provider(
+                transforms =
+                    mapOf(
+                        "stt" to
+                            com.tddworks.openai.gateway.config.TemplateTransform(
+                                path = "/v2/transcript",
+                                requestTemplate = buildJsonObject { put("audio_url", JsonPrimitive("https://a.test/x.wav")) },
+                                responseMapper =
+                                    com.tddworks.openai.gateway.config.ResponseMapper(
+                                        from = "$.id",
+                                        decode = "text",
+                                        jobId = "$.id",
+                                    ),
+                            ),
+                        "stt.poll" to
+                            com.tddworks.openai.gateway.config.TemplateTransform(
+                                path = "/v2/transcript/{{job_id}}",
+                                responseMapper = com.tddworks.openai.gateway.config.ResponseMapper(from = "$.text", decode = "text"),
+                            ),
+                    ),
+                timeoutMs = 20_000,
+            ) { request ->
+                calls++
+                when {
+                    request.url.encodedPath.contains("/poll") && calls > 1 -> respond("""{"id":"j1","status":"completed","text":"hello transcription"}""")
+                    request.url.encodedPath.contains("transcript/j1") -> respond("""{"id":"j1","status":"completed","text":"hello transcription"}""")
+                    else -> respond("""{"id":"j1","status":"queued"}""")
+                }
+            }
+        val text = p.transcribe(SttRequest(audio = "fake".encodeToByteArray()))
+        assertEquals("hello transcription", text)
+    }
+
+    @Test
+    fun `async job failure surfaces server error`() = runTest {
+        val p =
+            provider(
+                transforms =
+                    mapOf(
+                        "stt" to
+                            com.tddworks.openai.gateway.config.TemplateTransform(
+                                path = "/submit",
+                                responseMapper = com.tddworks.openai.gateway.config.ResponseMapper(from = "$.id", decode = "text", jobId = "$.id"),
+                            ),
+                        "stt.poll" to
+                            com.tddworks.openai.gateway.config.TemplateTransform(
+                                path = "/poll/{{job_id}}",
+                                responseMapper = com.tddworks.openai.gateway.config.ResponseMapper(from = "$.text", decode = "text"),
+                            ),
+                    ),
+                timeoutMs = 5_000,
+            ) { request ->
+                if (request.url.encodedPath.contains("submit")) respond("""{"id":"j1"}""")
+                else respond("""{"status":"failed","error":"audio too short"}""")
+            }
+        val e = runCatching { p.transcribe(SttRequest(audio = "noise".encodeToByteArray())) }.exceptionOrNull()
+        assertTrue(e is IllegalStateException && e.message!!.contains("failed"))
+    }
+
+    @Test
+    fun `async job times out while pending`() = runTest {
+        val p =
+            provider(
+                transforms =
+                    mapOf(
+                        "stt" to
+                            com.tddworks.openai.gateway.config.TemplateTransform(
+                                path = "/submit",
+                                responseMapper = com.tddworks.openai.gateway.config.ResponseMapper(from = "$.id", decode = "text", jobId = "$.id"),
+                            ),
+                        "stt.poll" to
+                            com.tddworks.openai.gateway.config.TemplateTransform(
+                                path = "/poll/{{job_id}}",
+                                responseMapper = com.tddworks.openai.gateway.config.ResponseMapper(from = "$.text", decode = "text"),
+                            ),
+                    ),
+                timeoutMs = 2_500,
+            ) { request ->
+                if (request.url.encodedPath.contains("submit")) respond("""{"id":"j1"}""")
+                else respond("""{"status":"processing"}""")
+            }
+        val started = System.currentTimeMillis()
+        val e = runCatching { p.transcribe(SttRequest(audio = "a".encodeToByteArray())) }.exceptionOrNull()
+        val elapsed = System.currentTimeMillis() - started
+        assertTrue(e is IllegalStateException && e.message!!.contains("timed out"))
+        assertTrue(elapsed >= 2_000, "expected at least one 2s poll delay, took ${elapsed}ms")
+    }
+
+    // ---- body formats ----
+
+    @Test
+    fun `raw ssml body renders template with content type`() = runTest {
+        val p =
+            provider(
+                transforms =
+                    mapOf(
+                        "audioSpeech" to
+                            com.tddworks.openai.gateway.config.TemplateTransform(
+                                path = "/cognitiveservices/v1",
+                                rawTemplate = "<speak><voice name=\"{{voice_id}}\">{{text}}</voice></speak>",
+                                bodyFormat = "raw",
+                                contentType = "application/ssml+xml",
+                                responseMapper = com.tddworks.openai.gateway.config.ResponseMapper(decode = "raw"),
+                            ),
+                    ),
+            ) { request ->
+                val body = (request.body as? io.ktor.http.content.TextContent)?.text ?: ""
+                if (!body.contains("<speak>") || !body.contains("hello there")) {
+                    respond("bad body", HttpStatusCode.BadRequest)
+                } else {
+                    respond(byteArrayOf(1, 2, 3), HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "audio/mpeg"))
+                }
+            }
+        val audio = p.synthesize(TtsRequest(text = "hello there", voice = "en-US-Ava"))
+        assertTrue(audio.contentEquals(byteArrayOf(1, 2, 3)))
+    }
+
+    @Test
+    fun `raw audio stt sends bytes body with mime`() = runTest {
+        val p =
+            provider(
+                transforms =
+                    mapOf(
+                        "stt" to
+                            com.tddworks.openai.gateway.config.TemplateTransform(
+                                path = "/v1/listen?model=nova-3",
+                                bodyFormat = "raw",
+                                responseMapper =
+                                    com.tddworks.openai.gateway.config.ResponseMapper(
+                                        from = "$.results.channels[0].alternatives[0].transcript",
+                                        decode = "text",
+                                    ),
+                            ),
+                    ),
+            ) { request ->
+                val ct = request.headers["Content-Type"]
+                if (ct == null || !ct.contains("audio/wav")) respond("wrong ct", HttpStatusCode.BadRequest)
+                respond("""{"results":{"channels":[{"alternatives":[{"transcript":"hi transcript"}]}]}}""")
+            }
+        val text = p.transcribe(SttRequest(audio = byteArrayOf(1, 2, 3), mime = "audio/wav"))
+        assertEquals("hi transcript", text)
+    }
+
+    @Test
+    fun `multipart stt sends file part with mime`() = runTest {
+        val p =
+            provider(
+                transforms =
+                    mapOf(
+                        "stt" to
+                            com.tddworks.openai.gateway.config.TemplateTransform(
+                                path = "/v1/speech-to-text",
+                                requestTemplate = buildJsonObject { put("model_id", JsonPrimitive("scribev1")) },
+                                bodyFormat = "multipart",
+                                multipartField = "file",
+                                responseMapper = com.tddworks.openai.gateway.config.ResponseMapper(from = "$.text", decode = "text"),
+                            ),
+                    ),
+            ) { request ->
+                if (request.body !is io.ktor.client.request.forms.MultiPartFormDataContent) {
+                    respond("expected multipart body", HttpStatusCode.BadRequest)
+                } else {
+                    respond("""{"text":"multipart transcript"}""")
+                }
+            }
+        val text = p.transcribe(SttRequest(audio = byteArrayOf(9, 9), mime = "audio/mpeg"))
+        assertEquals("multipart transcript", text)
+    }
+
+    @Test
+    fun `json stt embeds base64 data and language`() = runTest {
+        var body: String? = null
+        val p =
+            provider(
+                transforms =
+                    mapOf(
+                        "stt" to
+                            com.tddworks.openai.gateway.config.TemplateTransform(
+                                path = "/v1/speech-to-text",
+                                requestTemplate =
+                                    buildJsonObject {
+                                        put("file", JsonPrimitive("{{data}}"))
+                                        put("language_code", JsonPrimitive("{{language}}"))
+                                    },
+                                responseMapper = com.tddworks.openai.gateway.config.ResponseMapper(from = "$.text", decode = "text"),
+                            ),
+                    ),
+            ) { request ->
+                body = (request.body as? io.ktor.http.content.TextContent)?.text
+                respond("""{"text":"json transcript"}""")
+            }
+        val text = p.transcribe(SttRequest(audio = "abc".encodeToByteArray(), language = "en"))
+        assertEquals("json transcript", text)
+        assertTrue(body!!.contains("\"file\":\"YWJj\""))
+        assertTrue(body!!.contains("\"language_code\":\"en\""))
+    }
+
+    // ---- async images (BFL style) ----
+
+    @Test
+    fun `async image gen submits then polls for url`() = runTest {
+        val p =
+            provider(
+                transforms =
+                    mapOf(
+                        "imagesGenerations" to
+                            com.tddworks.openai.gateway.config.TemplateTransform(
+                                path = "/{{model}}",
+                                requestTemplate = buildJsonObject { put("prompt", JsonPrimitive("{{prompt}}")) },
+                                responseMapper =
+                                    com.tddworks.openai.gateway.config.ResponseMapper(
+                                        from = "$.id",
+                                        decode = "text",
+                                        jobId = "$.id",
+                                    ),
+                            ),
+                        "imagesGenerations.poll" to
+                            com.tddworks.openai.gateway.config.TemplateTransform(
+                                path = "/get_result",
+                                responseMapper =
+                                    com.tddworks.openai.gateway.config.ResponseMapper(
+                                        from = "$.result.sample",
+                                        decode = "url",
+                                    ),
+                            ),
+                    ),
+                timeoutMs = 15_000,
+            ) { request ->
+                when {
+                    request.url.encodedPath.contains("get_result") ->
+                        respond("""{"id":"g1","status":"Ready","result":{"sample":"https://img.test/1.png"}}""")
+                    else -> respond("""{"id":"g1","status":"Pending"}""")
+                }
+            }
+        val out = p.generate(ImageCreate(prompt = "a cat", model = com.tddworks.openai.api.chat.api.OpenAIModel("flux-pro-1.1")))
+        assertEquals("https://img.test/1.png", out.data[0].url)
+    }
+
+    // ---- video transforms (Runway style) ----
+
+    @Test
+    fun `video submit and poll via transforms`() = runTest {
+        val p =
+            provider(
+                transforms =
+                    mapOf(
+                        "videoSubmit" to
+                            com.tddworks.openai.gateway.config.TemplateTransform(
+                                path = "/text_to_video",
+                                requestTemplate =
+                                    buildJsonObject {
+                                        put("promptText", JsonPrimitive("{{prompt}}"))
+                                        put("ratio", JsonPrimitive("{{ratio}}"))
+                                    },
+                                responseMapper =
+                                    com.tddworks.openai.gateway.config.ResponseMapper(
+                                        from = "$.id",
+                                        decode = "text",
+                                        jobId = "$.id",
+                                    ),
+                            ),
+                        "videoPoll" to
+                            com.tddworks.openai.gateway.config.TemplateTransform(
+                                path = "/tasks/{{job_id}}",
+                                responseMapper = com.tddworks.openai.gateway.config.ResponseMapper(from = "$.output[0]", decode = "text"),
+                            ),
+                    ),
+            ) { request ->
+                when {
+                    request.url.encodedPath.contains("tasks/") ->
+                        respond("""{"id":"t1","status":"SUCCEEDED","output":["https://v.test/1.mp4"]}""")
+                    else -> respond("""{"id":"t1","status":"PENDING"}""")
+                }
+            }
+        val submitted = p.submitVideo(VideoRequest(model = "gen4.5", prompt = "waves", ratio = "16:9"))
+        assertEquals("PENDING", submitted.status)
+        val done = p.retrieveVideoTask("t1")
+        assertEquals("SUCCEEDED", done.status)
+        assertEquals("https://v.test/1.mp4", done.videoUrl)
+    }
+
+    @Test
+    fun `video poll failure throws with server message`() = runTest {
+        val p =
+            provider(
+                transforms =
+                    mapOf(
+                        "videoSubmit" to
+                            com.tddworks.openai.gateway.config.TemplateTransform(
+                                path = "/text_to_video",
+                                responseMapper = com.tddworks.openai.gateway.config.ResponseMapper(from = "$.id", decode = "text", jobId = "$.id"),
+                            ),
+                        "videoPoll" to
+                            com.tddworks.openai.gateway.config.TemplateTransform(
+                                path = "/tasks/{{job_id}}",
+                                responseMapper = com.tddworks.openai.gateway.config.ResponseMapper(from = "$.output[0]", decode = "text"),
+                            ),
+                    ),
+            ) { request ->
+                if (request.url.encodedPath.contains("tasks/")) respond("""{"status":"failed","error":"content moderation"}""")
+                else respond("""{"id":"t9"}""")
+            }
+        p.submitVideo(VideoRequest(model = "m", prompt = "p"))
+        val e = runCatching { p.retrieveVideoTask("t9") }.exceptionOrNull()
+        assertTrue(e is IllegalStateException && e.message!!.contains("failed"))
     }
 }

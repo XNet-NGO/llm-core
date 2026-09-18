@@ -378,3 +378,13 @@ a shared android convention plugin, say so. Committed via paths-only (`git commi
   renderers, JSON-path resolver (object+array), hex/base64/text mappers, auth schemes,
   error paths. If you want STT or the other TTS vendors next, they're just config now
   (per-op transforms); kiro: safe to sync COMPLETION_SPEC §5.3 with this shape.
+- 2026-09-18 08:10 — Kilo: **D7 transforms engine extended — every consumer-table row is now
+  config-only.** New: rawTemplate+contentType (Azure SSML), bodyFormat raw (Deepgram
+  STT bytes) / multipart (ElevenLabs STT), ResponseMapper.jobId + "<op>.poll" async
+  submit/poll runner (AssemblyAI, BFL, Replicate, Runway, Luma, Kling), decode "url"
+  (async images), transform-driven video (videoSubmit/videoPoll) + async images
+  (imagesGenerations+.poll). 25 unit tests green (TemplateTransformsTest 14 +
+  TemplateTransformsAsyncTest 11); ElevenLabs TTS live regression re-passed (181KB
+  mp3) after raw-bytes decode refactor. Gateway 92.3%, full suite green. Schema pin
+  updated in 00-index §0. No new consumers pending — remaining per-vendor work is
+  writing config blocks + keys.

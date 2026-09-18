@@ -112,7 +112,7 @@ mechanical.
  "catalog":{"mode":"STATIC","models":[]}}
 ```
 
-## #086 — AssemblyAI 🟡
+## #086 — AssemblyAI 🟡 (engine-ready: async submit/poll via transforms)
 - dialect: TEMPLATE (async)
 - baseUrl: `https://api.assemblyai.com`
 - auth: BEARER
@@ -264,7 +264,7 @@ mechanical.
  "streaming":"CHUNKED","catalog":{"mode":"STATIC","models":[]}}
 ```
 
-## #093 — BFL (Black Forest Labs, official Flux) 🟡 (VERIFIED 2026-09: docs.bfl.ml)
+## #093 — BFL (Black Forest Labs, official Flux) 🟡 (VERIFIED 2026-09; engine-ready: imagesGenerations+.poll async)
 - dialect: TEMPLATE (async)
 - baseUrl: `https://api.bfl.ai/v1`
 - auth: BEARER (`Authorization: Bearer <key>`)
@@ -311,7 +311,7 @@ mechanical.
  "streaming":"CHUNKED","catalog":{"mode":"STATIC","models":[]}}
 ```
 
-## #095 — Runway (Runway Dev) 🟡 (VERIFIED 2026-09: docs.dev.runwayml.com)
+## #095 — Runway (Runway Dev) 🟡 (VERIFIED 2026-09; engine-ready: videoSubmit/videoPoll transforms)
 - dialect: TEMPLATE (async tasks)
 - baseUrl: `https://api.dev.runwayml.com/v1`
 - auth: BEARER + required header `X-Runway-Version: 2024-11-06` (VERIFIED — versioned
@@ -409,7 +409,7 @@ mechanical.
  "streaming":"CHUNKED","catalog":{"mode":"STATIC","models":[]}}
 ```
 
-## #099 — Azure Speech (TTS/STT) 🟡
+## #099 — Azure Speech (TTS/STT) 🟡 (engine-ready: raw SSML via rawTemplate)
 - dialect: TEMPLATE (+ WS)
 - baseUrl: `https://{REGION}.tts.speech.microsoft.com` (TTS) /
   `https://{REGION}.stt.speech.microsoft.com` (STT)
