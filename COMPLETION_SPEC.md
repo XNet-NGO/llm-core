@@ -163,16 +163,19 @@ schemes fully functional when a signer is installed, and degrades gracefully (un
 - [ ] **5.3** Turn-stream (one-way TTS/STT) providers via D7 templates (ElevenLabs, Deepgram,
       Cartesia).
 
-## 6. Catalog & capability discovery
+## 6. Catalog & capability discovery — DONE
 
-- [ ] **6.1** `ProviderCatalogLoader` auto/static/merged is implemented — add the **host-side
-      TTL cache** the `resolveCatalog(cached=...)` param anticipates (nothing caches yet).
-- [ ] **6.2** Capability inference from catalog fields (`input_modalities`,
-      `supported_features/reasoning`) with config override precedence (spec §5).
-- [ ] **6.3** Catalog source: **fetch-on-demand only** (decided). Do **not** bundle a static
-      OpenRouter/LiteLLM catalog asset into the repo — the core exposes live catalog data via
-      `ProviderCatalogLoader`; any static/merged base is supplied by the caller as config
-      (`Catalog.models`), never shipped in-tree. Resolves borrow-patterns §5 open question.
+- [x] **6.1** `CatalogCache` (new): host-side TTL cache keyed by provider id, Ktor `GMTDate`
+      clock (injectable for tests). `getOrFetch(config)` fetches+caches on miss/expiry, never
+      fetches for STATIC; `resolveCatalog(config)` uses the cache as the live source. Wraps the
+      `resolveCatalog(cached=...)` hook that was previously unused. `CatalogCacheTest` (5 cases).
+- [x] **6.2** `CapabilityInference` (new): derives `Capabilities` from catalog
+      `input_modalities`/`output_modalities`/`supported_features` (embeddings, tts/stt,
+      imagesGenerate, rerank, moderation). `merge()` enforces spec §5 precedence — explicit config
+      always wins; inference only adds default-false flags. `resolve(config, catalog)` convenience.
+      `CapabilityInferenceTest` (8 cases). Compiles JVM + macOS/native.
+- [x] **6.3** Catalog source: **fetch-on-demand only** (decided). No bundled static catalog asset;
+      any static/merged base is caller-supplied via `Catalog.models`. Resolved.
 
 ## 7. Gateway operational layer — OUT OF SCOPE
 
